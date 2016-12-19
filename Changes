@@ -1,0 +1,69 @@
+Revision history for DbCompare and DataCompare scripts
+
+DbCompare.pl
+
+	1.02 
+		- excluding columns
+
+	1.03 
+		- posibility for providing tablenames in --schema parameter alternative --table
+		- fix infinite loop if --test flag is used
+
+	1.04 
+		- add pk/uk comparison (no additional column nor sha1)
+
+	1.05 
+		- fix in GetTableList (uc table name)
+
+DataCompare.pm 
+	
+	1.17  
+		- add flag for skipping comparison of column type and column nullable flag --nochecktype --nochecknullable
+
+	1.16	 
+		- add compare by PK/UK only - not by given column nor sha1 sum
+
+	1.15  
+		- add exclude columns
+
+	1.14  
+		- check if number of columns is the same in compared tables
+
+	1.13  
+		- support for XMLType for SHA1: XMLType.getBlobVal(CONTNT_XML_TXT,nls_charset_id('AL32UTF8')) but it could
+		 be better with XMLType.getClobVal(CONTNT_XML_TXT) or t.CONTNT_XML_TXT.getClobVal() from data_owner.table t
+
+	1.12  
+		- turn off limiter in case comparing using column, 
+		 do we really need to add some lag in where clause for GG? you cannot compare other types than date/tmstmp then
+
+	1.11  
+		- if error and die, print $RUNNING code 
+
+	1.10  
+		- sleep for each secondstage fixed
+
+	1.09  
+		- parameter file changed to logfile
+
+	1.08  
+		- GetPrimaryKey  do not force the same constraint name
+
+	1.07  
+		- DataCompare.pm
+
+	1.06  
+		- add comments
+
+	1.05  
+		- add mappartition and manual
+
+	1.04  
+		- add partition and partitionfor
+
+	1.03  
+		- change to_clob to utl_raw.cast_to_raw gives better performance on non lob column
+
+	1.02  
+		- add aliases, basic table maping
+
