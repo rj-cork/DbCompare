@@ -2,8 +2,10 @@ DataCompare:
 	- review if NLV is needed with DBMS_CRYPTO.Hash call and check if orahash is faster
 
 DbCompare: 
-	- 'continue' flag, if enabled the script starts only when there are unfinished tables in state file, otherwise quits
+	- test 'continue' flag, if enabled the script starts only when there are unfinished tables in state file, otherwise quits
 		To be able to create an entry in crontab to start the script and another entry to restart it only if needed
+
+	- add parallelism in case multiple tables/partitions - may be implemented as fork, parallel writing of output should be resolved 
 
 	- remap partitions? partitions --remap [db2=][schema1.][tablename1]{PART1}:[schema2.][tablename2]{PART1,PART2}
 
