@@ -1,5 +1,8 @@
 DataCompare:
-	- review if NLV is needed with DBMS_CRYPTO.Hash call and check if orahash is faster
+	- review if NLV is needed with DBMS_CRYPTO.Hash call and check if orahash is faster. Check STANDARD_HASH
+	avg(length(standard_hash(column))) is 4.5x faster than dbms_crypto.hash(utl_raw.cast_to_raw(column),3) if column is varchar2(8 char)
+	
+	
 
 DbCompare: 
 	- in case comparison is done using PK (or some column in smaller degree) the majority of processing time is spent on sending data through the network
@@ -31,3 +34,8 @@ DbCompare:
 	<b>dddd</b>
 	<hr>
 	__END__
+
+
+DataSync:
+
+	- create script that takes output from DbCompare/DataCompare and synchronizes reported rows
