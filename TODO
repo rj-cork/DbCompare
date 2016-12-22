@@ -2,9 +2,10 @@ DataCompare:
 	- review if NLV is needed with DBMS_CRYPTO.Hash call and check if orahash is faster. Check STANDARD_HASH
 	avg(length(standard_hash(column))) is 4.5x faster than dbms_crypto.hash(utl_raw.cast_to_raw(column),3) if column is varchar2(8 char)
 	
-	
 
 DbCompare: 
+	- if DataCompare returns error like too many out of sync records it should skip this table and continue with next one
+
 	- in case comparison is done using PK (or some column in smaller degree) the majority of processing time is spent on sending data through the network
 		and comparing in DbCompare script. If CPU on server running DbCompare is not a constraint we can start comparison of next table/partition
 		just after first rows are received from the (last) compared database. It may be limited/connected somehow with DbCompare parallelism.
