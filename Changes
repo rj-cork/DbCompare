@@ -15,6 +15,12 @@ DbCompare.pl
 	1.05 
 		- fix in GetTableList (uc table name)
 
+	1.06 
+		- missing Pod::Usage, changes in manual
+
+	1.07 
+		- tables with $ were handled incorrectly
+
 DataCompare.pm 
 	
 	1.17  

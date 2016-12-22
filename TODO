@@ -2,12 +2,19 @@ DataCompare:
 	- review if NLV is needed with DBMS_CRYPTO.Hash call and check if orahash is faster
 
 DbCompare: 
-	- test 'continue' flag, if enabled the script starts only when there are unfinished tables in state file, otherwise quits
-		To be able to create an entry in crontab to start the script and another entry to restart it only if needed
+	- in case comparison is done using PK () or some column (--compare) 
 
 	- add parallelism in case multiple tables/partitions - may be implemented as fork, parallel writing of output should be resolved 
 
+	- it there is no PK nor UK on table it could be skipped, can this be changed to all columns like in GG replication?
+
+	- add posibility to choose dedicated mode for connection
+
 	- remap partitions? partitions --remap [db2=][schema1.][tablename1]{PART1}:[schema2.][tablename2]{PART1,PART2}
+
+	- change dbms_crypto.hash(utl_raw.cast_to_raw(column),3) to standard_hash(column), should give 10x improvement, (check for big varchars)
+		works for varchar2, number,date,timestamp. sys_op_combined_hash works ok on simple types as well.
+	
 
 	- add HTML reports
 	cat ~/campaigns/release-status.html | mail -s "$(echo -e "Release Status [Green]\nContent-Type: text/html")" to.address@company.com -v

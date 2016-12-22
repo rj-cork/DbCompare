@@ -2,8 +2,8 @@
 
 # DataCompare.pl - script and manual for comparing data in multiple 
 #		   schemas/tables across multiple databases
-# Version 1.05
-# (C) 2016 - Radoslaw Karas <rk.cork@gmail.com>
+# Version 1.07
+# (C) 2016 - Radoslaw Karas <rj.cork@gmail.com>
 # 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -32,6 +32,7 @@ use IO::Select;
 use IO::Handle;
 use Data::Dumper;
 use Getopt::Long;
+use Pod::Usage;
 use POSIX qw(strftime :sys_wait_h :signal_h);
 
 ####################################################################################
@@ -500,7 +501,7 @@ sub GetAllTables {
 		}
 		foreach my $s (@{$schemas}) {
 				# $1 (obligatory) - schema, $2 (optional) - table 
-			if ($s =~ /^([\w\d\?\*%]+)(?:\.([\w\d\?\*%]+))?$/) { 
+			if ($s =~ /^([\w\d\?\*%]+)(?:\.([\w\d\$\?\*%]+))?$/) { 
 				$table_list{$db} = GetTableList($dbh, $1, $2);
 			} else {
 				$table_list{$db} = GetTableList($dbh, $s);
@@ -538,7 +539,7 @@ sub RemoveExcludedTables {
 	my $exclusions = 0;
 
 	foreach my $t (sort keys %{$tables}) {
-		if ($t =~ /^(?:([\w\d]+)\.)([\w\d]+)(?:\.([\w\d]+))?$/) {
+		if ($t =~ /^(?:([\w\d]+)\.)([\w\d\$]+)(?:\.([\w\d]+))?$/) {
 			my ($sch,$ta,$pa) = ($1,$2,$3);
 			#print STDERR "$t => $sch|$ta|$pa\n";
 			if ( MatchRegexp($sch, $e_schema) && MatchRegexp($ta, $e_table) ) { #&& MatchRegexp($pa, $e_part) ) {
@@ -577,7 +578,7 @@ sub RemoveExcludesFromList {
 		# 	$1(optional)-dbalias, $2-schema,    $3(opt)-table,     $4(opt)-partition 
 		#   since v1.02 $4 will not be partition, it will be a column, RemoveExcludedTables is updated as well
 		#	$1(optional)-dbalias, $2-schema,    $3(opt)-table,     $4(opt)-column - without wildcards
-		if ($e =~ /^(?:([\w\d]+)=)?([\w\d\?\*%]+)(?:\.([\w\d\?\*%]+))?(?:\.([\w\d]+))?$/) {
+		if ($e =~ /^(?:([\w\d]+)=)?([\w\d\?\*%]+)(?:\.([\w\d\$\?\*%]+))?(?:\.([\w\d]+))?$/) {
 			my ($dba, $schema, $table, $column) = ($1, $2, $3, $4);
 			#empty/undef value means all 
 			#print "$dba, $schema, $table, $column\n";
@@ -676,7 +677,7 @@ sub RemapTables {
 	my $mappings = 0;
 
 	foreach my $t (sort keys %{$tables}) {
-		if ($t =~ /^(?:([\w\d]+)\.)([\w\d]+)(?:\.([\w\d]+))?$/) {
+		if ($t =~ /^(?:([\w\d]+)\.)([\w\d\$]+)(?:\.([\w\d]+))?$/) {
 			my ($sch,$ta,$pa) = ($1,$2,$3);
 			PrintMsg DEBUG2, "RemapTables(): remap for $t with pattern: ",Def($f_s,',',$f_t,',',$f_p),
 			     '; replacement: ',Def($t_s,',',$t_t,',',$t_p);
@@ -732,7 +733,7 @@ sub RemapAllTables {
 				exit 1;
 			}
 				#$1-schema, $2(opt)-table, $3(opt)-partition
-			if ($from =~ /^([\w\d\?\*%]+)(?:\.([\w\d\?\*%]+))?(?:\.([\w\d\?\*%]+))?$/) {
+			if ($from =~ /^([\w\d\?\*%]+)(?:\.([\w\d\$\?\*%]+))?(?:\.([\w\d\?\*%]+))?$/) {
 				($from_sch,$from_tab,$from_par) = ($1,$2,$3);
 			} else {
 				PrintMsg ERROR, "RemapAllTables(): Invalid from specification in $m remap caluse\n";
@@ -740,7 +741,7 @@ sub RemapAllTables {
 			}
 
 				#$1-schema, $2(opt)-table, $3(opt)-partition
-			if ($to =~ /^([\w\d\?\*%]+)(?:\.([\w\d\?\*%]+))?(?:\.([\w\d\?\*%]+))?$/) {
+			if ($to =~ /^([\w\d\?\*%]+)(?:\.([\w\d\$\?\*%]+))?(?:\.([\w\d\?\*%]+))?$/) {
 				($to_sch,$to_tab,$to_par) = ($1,$2,$3);
 			} else {
 				PrintMsg ERROR, "RemapAllTables(): Invalid to specification in $m remap caluse\n";
@@ -778,11 +779,11 @@ sub MarkCmpColumns {
 		my $c_count = 0;
 		$c = uc($c);
 		#$1(optional) - schema, $2(opt) - table, $3 column for comparision
-		if ($c =~ /^(?:([\w\d\?\*%]+)\.)?(?:([\w\d\?\*%]+)\.)?([\w\d]+)$/) {
+		if ($c =~ /^(?:([\w\d\?\*%]+)\.)?(?:([\w\d\$\?\*%]+)\.)?([\w\d]+)$/) {
 			my ($c_sch,$c_tab,$c_col) = ($1,$2,$3);
 
 			foreach my $t (sort keys %{$table_list->{$BASEDB}}) {
-				if ($t =~ /^(?:([\w\d]+)\.)([\w\d]+)(?:\.([\w\d]+))?$/) {
+				if ($t =~ /^(?:([\w\d]+)\.)([\w\d\$]+)(?:\.([\w\d]+))?$/) {
 					my ($sch,$ta,$pa) = ($1,$2,$3);
 
 					if ( MatchRegexp($sch, $c_sch) && MatchRegexp($ta, $c_tab) ) {
@@ -816,11 +817,11 @@ sub MarkCmpKeyOnly {
 		my $c_count = 0;
 		$c = uc($c);
 		#$1(optional) - schema, $2 - table
-		if ($c =~ /^(?:([\w\d\?\*%]+)\.)?([\w\d\?\*%]+)$/) {
+		if ($c =~ /^(?:([\w\d\?\*%]+)\.)?([\w\d\$\?\*%]+)$/) {
 			my ($c_sch,$c_tab) = ($1,$2);
 
 			foreach my $t (sort keys %{$table_list->{$BASEDB}}) {
-				if ($t =~ /^(?:([\w\d]+)\.)([\w\d]+)(?:\.([\w\d]+))?$/) {
+				if ($t =~ /^(?:([\w\d]+)\.)([\w\d\$]+)(?:\.([\w\d]+))?$/) {
 					my ($sch,$ta,$pa) = ($1,$2,$3);
 
 
@@ -1159,7 +1160,7 @@ sub PopulateReport {
 		PrintMsg DEBUG1|DEBUGNOLOG, "\t$in";
 	}
 	
-	if ($table_name !~ /^(?:([\w\d]+)\.)([\w\d]+)(?:\.([\w\d]+))?$/) {
+	if ($table_name !~ /^(?:([\w\d\$]+)\.)([\w\d\$]+)(?:\.([\w\d]+))?$/) {
 		PrintMsg ERROR, "PopulateReport(): cannot parse table name $table_name\n";
 	}
 	my $tab = "$1.$2";
@@ -1213,7 +1214,7 @@ sub PrepareArgs {
 	my $info = "$BASEDB=";
 	my ($sch,$tab,$par);
 	
-	if ($table_name =~ /^([\w\d\?\*%]+)\.([\w\d\?\*%]+)(?:\.([\w\d\?\*%]+))?$/) {
+	if ($table_name =~ /^([\w\d\?\*%]+)\.([\w\d\$\?\*%]+)(?:\.([\w\d\?\*%]+))?$/) {
 		($sch,$tab,$par) = ($1,$2,$3);
 
 		push @args, '--table', "$sch.$tab";
@@ -1447,6 +1448,7 @@ ProcessAllTables($list, $report, \%DATABASES);
 # --schema schema[.tablename] #if %/? then like 
 # --exclude [db2=]schema[.tablename][.column] #if %/? then like %/_ LIKE '%A\_B%' ESCAPE '\'; ; column without wildcards
 # --compare [schema.][tablename.]column --compare [schema2.][tablename2.]column2
+# --comparekey [schema1.]t?ble%1 -> relates to BASEDB/PRIMARY
 # --remap [db2=]schema1[.tablename1][.part1]:schema2[.tablename2][.part2] <- without multiple partition mapping
 
 __END__
@@ -1461,7 +1463,7 @@ __END__
 
 =head1 SYNOPSIS
 
-DbCompare.pl --db [dbalias=]user[/pass]@host1[:port]/service --db [dbalias2=]user[/pass]@host2[:port]/service --schema schema [--compare [schema.][table.]column] [--parallel NUMBER] [--statefile file.state] [--logfile log.txt] [--pidfile file.pid] [--maxload NUMBER] [--remap dbalias=schema1[.table1]:schema2[.table2]] [--range "TIME SPECIFICATION"] [--exclude schema[.table]] [--auxuser user[/pass]] [--test] [-v] [--help|-h]
+DbCompare.pl --db [dbalias=]user[/pass]@host1[:port]/service --db [dbalias2=]user[/pass]@host2[:port]/service --schema schema [--compare [schema.][table.]column] [--comparekey [schema.]table] [--parallel NUMBER] [--statefile file.state] [--logfile log.txt] [--pidfile file.pid] [--maxload NUMBER] [--remap dbalias=schema1[.table1]:schema2[.table2]] [--range "TIME SPECIFICATION"] [--exclude schema[.table]] [--auxuser user[/pass]] [--test] [-v] [--help|-h]
 
 =head1 DESCRIPTION
 
@@ -1494,6 +1496,10 @@ In case SHA1 is used for data comparison, you can choose which column to skip du
 =item -c, --compare [schema.][tablename.]column 
 
 Compares rows by given column. It should be timestamp column and it should be updated each time a DML modifies the row. It is much faster than comparing whole row using SHA1 hash. If only column is given, then all tables in all schemas will be compared using this column. If column with table name is given then the column will be used only for spectified table in all schemas provided in --schema parameter. You can use %, * or ? as wildcards. You can use multiple --compare options.
+
+=item --comparekey [schema.]table
+
+Compares rows using PK or unique key. It is the fastest way for comparision as the database is performing fast full index scan only. If only table name is given then the PK comparison will be used only for spectified table in all schemas provided in --schema parameter. You can use %, * or ? as wildcards. You can use multiple --comparekey options. 
 
 =item -p, --parallel NUMBER
 
@@ -1545,7 +1551,7 @@ Displays this message.
 
 perl DbCompare.pl --db db1=user/passwd@host1/service --db db2=user/passwd@host2/service --schema data_owner --range "Mo-Su 1-19:50" --logfile DbCompare.log  --state statefile.dat --maxload 10 --auxuser system --pidfile dbcompare.pid --parallel 8 --exclude DATA_OWNER.NONREPLICATEDTBL --remap db2=DATA_OWNER.TAB%:DATA_USER.TAB%
 
-perl DbCompare.pl --basedb user/passwd@host1/service --db user/passwd@host3/service2 --schema=data_%.TA% --range="Mo-Fri 3-12:50" --logfile DbCompare.log --state statefile.dat --maxload 10 
+perl DbCompare.pl --basedb user/passwd@host1/service --db user/passwd@host3/service2 --schema=data_%.TA% --range="Mo-Fri 3-12:50" --logfile DbCompare.log --state statefile.dat --maxload 10 --comparekey %
 
 perl DbCompare.pl --db user/passwd@host1/service --db user/passwd@host3/service2 --schema DATA_OWNER --exclude "DATA_OWNER.%TABLES" --parallel 8
 
