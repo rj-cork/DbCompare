@@ -2,7 +2,9 @@ DataCompare:
 	- review if NLV is needed with DBMS_CRYPTO.Hash call and check if orahash is faster
 
 DbCompare: 
-	- in case comparison is done using PK () or some column (--compare) 
+	- in case comparison is done using PK (or some column in smaller degree) the majority of processing time is spent on sending data through the network
+		and comparing in DbCompare script. If CPU on server running DbCompare is not a constraint we can start comparison of next table/partition
+		just after first rows are received from the (last) compared database. It may be limited/connected somehow with DbCompare parallelism.
 
 	- add parallelism in case multiple tables/partitions - may be implemented as fork, parallel writing of output should be resolved 
 
