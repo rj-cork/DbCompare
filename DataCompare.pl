@@ -97,6 +97,10 @@ Changes partition name given by --partition to different partition in database r
 
 Increases verbosity level. You may add multiple -v to increase the level.
 
+=item --excludecol,--excludecolumn col1[,col2]
+
+Excludes column or columns from hash sum comparison. Can be specified multiple times.
+
 =item -l, --logfile FILENAME
 
 Stores all output messages to given file. The file is opened in APPEND mode.
@@ -121,7 +125,7 @@ DataCompare.pl --db db1=system/pass@rac1-scan/testdb1 --db db2=system/pass@rac2-
 
 DataCompare.pl --db system@rac1-scan/testdb1 --db system@rac2-scan/testdb2  --table=data_owner.othertable --partition=P_0005 
 
-DataCompare.pl --db system@rac1-scan/testdb1 --db db2=system@rac2-scan/testdb2  --table=DATA_OWNER.table2 --map db2=schema_test.table2
+DataCompare.pl --db system@rac1-scan/testdb1 --db db2=system@rac2-scan/testdb2  --table=DATA_OWNER.table2 --map db2=schema_test.table2 --excludecolumn column_1,column_4
 
 DataCompare.pl --db db1=user@rac1-scan/testdb1 --db db2=user@rac2-scan/testdb2 --table=data_owner.table3 --partition=P_0004 --parallel=6 --logfile table3.P_0004.log
 

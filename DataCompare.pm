@@ -92,6 +92,8 @@ my $OUTOFSYNCCOUNTER :shared = 0;
 my $CMP_KEY_ONLY :shared = 0; #if set, do not use column for comparison nor sha1 - just check pk -> records existence 
 my $LIMITER :shared; #used if CMP_COLUMN defined, TODO: will it be used at all?
 
+my $print_exec_finished :shared = 1; #flag for printing message about finished sql executing only once in all workers
+
 my $MAX_ROWS = 10000; #how many rows to process at once
 my $MAX_DIFFS = $MAX_ROWS*120; #maximum out of sync recorded records. it is sefety limit
 				#so the script will not allocate whole memory if
@@ -663,13 +665,20 @@ sub FirstStageWorker {
 			lock(%PROGRESS);
 
 			my $p = $PROGRESS{$worker_name};
-			foreach my $k (keys %PROGRESS) { #$p is the worker with the smallest progress
+			foreach my $k (keys %PROGRESS) { #$p is the smallest progress for all workers
 				$p = $PROGRESS{$k} if ($PROGRESS{$k}<$p);
 			}
+
+			#if the smallest progress is >0 then all are downloading data now and sql execution phase has ended across all databases
+			if ($p > 0) {
+				PrintMsg( "FirstStageWorker: sql execution finished across all workers.\n") if ($print_exec_finished);
+				$print_exec_finished = 0;
+			}
+
 			#$s is the difference between this worker and the slowest one
 			$s=$PROGRESS{$worker_name}-$p;
 
-			until($s < 20) { #the difference cannot be bigger than 112 - around 500MB RAM per database connection
+			until($s < 20) { #the difference cannot be bigger than 112 - around 500MB RAM per database connection for MAX_ROWS=10000
 				PrintMsg( "[$worker_name] batch no. $PROGRESS{$worker_name} is $s ahead others, waiting\n") if ($DEBUG>0);
 				#find worker with the smallest progress different than this one
 				$p = $PROGRESS{$worker_name};
