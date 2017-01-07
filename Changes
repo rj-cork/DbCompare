@@ -23,6 +23,10 @@ DbCompare.pl
 
 DataCompare.pm 
 	
+	1.18
+		- if there are PK/UK columns only in the table and we are about to check SHA1 then switch to keycompare more
+		 because SHA1 is calculated using columns not in PK/UK. Flag SWITCH_TO_CMP_PK_IF_NEEDED turn this on.
+	
 	1.17  
 		- add flag for skipping comparison of column type and column nullable flag --nochecktype --nochecknullable
 

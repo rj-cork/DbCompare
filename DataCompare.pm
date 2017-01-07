@@ -1,7 +1,7 @@
 package DataCompare;
 
 # DataCompare package - functions for comparing data in multiple tables/table partitions
-# Version 1.17
+# Version 1.18
 # (C) 2016 - Radoslaw Karas <rj.cork@gmail.com>
 # 
 # This program is free software; you can redistribute it and/or modify
@@ -89,6 +89,8 @@ my %PROGRESS :shared; #controls how many select result batches workers can be of
 my %MAPPINGS :shared;
 my %PARTMAPPINGS :shared;
 my $OUTOFSYNCCOUNTER :shared = 0;
+my $CMP_KEY_ONLY :shared = 0; #if set, do not use column for comparison nor sha1 - just check pk -> records existence 
+my $LIMITER :shared; #used if CMP_COLUMN defined, TODO: will it be used at all?
 
 my $MAX_ROWS = 10000; #how many rows to process at once
 my $MAX_DIFFS = $MAX_ROWS*120; #maximum out of sync recorded records. it is sefety limit
@@ -100,8 +102,6 @@ my $PARTITION = ''; #compare certain partition if given
 my @TABLENAMES;
 my $DEBUG=0;
 my $CMP_COLUMN;
-my $CMP_KEY_ONLY=0; #if set, do not use column for comparison nor sha1 - just check pk -> records existence 
-my $LIMITER; #used if CMP_COLUMN defined
 my $SHIFT=10*60; #used if CMP_COLUMN defined - how much seconds back from now we are selecting data
 		# 10 minutes should be enough for data to be replicated from SRC to DST so (almost)a
 		# all records with timestamp<systimestamp-$SHIFT should be in sync
@@ -110,6 +110,8 @@ my $ROUNDS = 5; #how many 2nd stage lookup passes
 my %EXCLUDE_COLUMNS; #columns that should be skipped, kept in hash for easy look up. 
 my $CHECK_COL_TYPE = 1;
 my $CHECK_COL_NULLABLE = 1;
+my $SWITCH_TO_CMP_PK_IF_NEEDED = 1; #allow to switch automatically to PK/U compare mode if all columns are 
+				    #in PK/UK and there is no column to calculate SHA1 
 
 #############################################################################
 
@@ -372,8 +374,8 @@ sub GetPrimaryKey {
 	my $u_found=0;
 	my $cname;
 	
-	lock($COLSFILLED);
-	if ($COLSFILLED) { #pk/uniq was checked by some other worker
+	lock($COLSFILLED); #this is async process
+	if ($COLSFILLED) { #pk/uniq was retrieved by some other worker, so we will compare 
 		foreach my $row (@{$r}) {
 			if ($row->{CTYPE} eq 'P') {
 				$pk_found=1;
@@ -398,14 +400,14 @@ sub GetPrimaryKey {
 				}
 			}
 		}
-	} else {
+	} else { #save pk/uniq columns for comparision
 		foreach my $row (@{$r}) {
 			if ($row->{CTYPE} eq 'P') {
 				$pk_found=1;
 				$COLUMNS{$row->{COLUMN_NAME}}->{CONSTRAINT}='P';
 				$COLUMNS{$row->{COLUMN_NAME}}->{CPOSITON}=$row->{POSITION};
 				$COLUMNS{$row->{COLUMN_NAME}}->{CONSTRAINT_NAME}=$row->{CONSTRAINT_NAME};
-			} elsif($pk_found==0 and $row->{CTYPE} eq 'U') { #there was no PK captured before
+			} elsif($pk_found==0 and $row->{CTYPE} eq 'U') { #there was no PK captured before, there is order by ctype so P will be always before U
 				if (not defined($cname) or $cname eq $row->{CONSTRAINT_NAME} ) {
 					$COLUMNS{$row->{COLUMN_NAME}}->{CONSTRAINT}='U';
 					$COLUMNS{$row->{COLUMN_NAME}}->{CPOSITON}=$row->{POSITION};
@@ -425,8 +427,8 @@ sub GetPrimaryKey {
 
 	if ($COLSFILLED) { 
 		PrintMsg ("GetPrimaryKey($wname): Constraint PK/U verified correctly\n") if ($u_found+$pk_found>0 && $DEBUG>0);
-	} else {
-		if ($DEBUG>0) {
+	} else { #this is first worker to retrieve PK/UK information
+		if ($DEBUG>0) { 
 			PrintMsg ("GetPrimaryKey($wname): ");
 			foreach my $i (sort { $COLUMNS{$a}->{CPOSITON} <=> $COLUMNS{$b}->{CPOSITON} } grep {defined $COLUMNS{$_}->{CPOSITON}} keys %COLUMNS) {
 				 $cname = "(constraint name: ".$COLUMNS{$i}->{CONSTRAINT_NAME}.', type: '.$COLUMNS{$i}->{CONSTRAINT}.')';
@@ -437,6 +439,20 @@ sub GetPrimaryKey {
 	}
 
 	$COLSFILLED=1;
+	
+	if ($SWITCH_TO_CMP_PK_IF_NEEDED) { #switch to PK compare mode if all columns are in PK. CMP_KEY_ONLY=1
+		foreach my $c (keys %COLUMNS) {
+			#if the column is not to be excludes and if is not part of PK/UK then we are able to calculate sha1 if needed
+			if (!defined($EXCLUDE_COLUMNS{$c}) && !defined($COLUMNS{$c}->{CONSTRAINT})) { #should be P or U if column is part of PK/U constraint 
+				PrintMsg ("GetPrimaryKey($wname): Found column which is not in PK/U: $c\n") if ($DEBUG>0);
+				return 0;
+			}	
+		}
+		PrintMsg ("GetPrimaryKey($wname): All columns are included in PK/U constraint. Switching to keyonly comparison mode.\n");
+		$LIMITER = '1=1';
+		$CMP_KEY_ONLY = 1;
+	}	
+
 	return 0;
 }
 
