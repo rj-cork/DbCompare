@@ -442,7 +442,7 @@ sub GetPrimaryKey {
 
 	$COLSFILLED=1;
 	
-	if ($SWITCH_TO_CMP_PK_IF_NEEDED) { #switch to PK compare mode if all columns are in PK. CMP_KEY_ONLY=1
+	if ($CMP_KEY_ONLY == 0 && $SWITCH_TO_CMP_PK_IF_NEEDED > 0) { #switch to PK compare mode if all columns are in PK. CMP_KEY_ONLY=1
 		foreach my $c (keys %COLUMNS) {
 			#if the column is not to be excludes and if is not part of PK/UK then we are able to calculate sha1 if needed
 			if (!defined($EXCLUDE_COLUMNS{$c}) && !defined($COLUMNS{$c}->{CONSTRAINT})) { #should be P or U if column is part of PK/U constraint 
@@ -744,8 +744,15 @@ sub FirstStageWorker {
 			PrintMsg( "[$worker_name] $i \n") if ($i % 1000000 == 0);
 		}
 
-		$OUTOFSYNCCOUNTER = $OUTOFSYNCCOUNTER + $out_of_sync_counter + $thisdb_only_counter - $in_sync_counter;
-		PrintMsg( "[$worker_name] Mid stats: $i, in sync: $in_sync_counter, ",
+		#check how many out of sync records is at the moment
+		my $max_oos = 0;
+		foreach my $d (keys %DIFFS) {
+			my $j = scalar(keys %{$DIFFS{$d}});
+			$max_oos = $j if ($j > $max_oos);
+		}
+
+		$OUTOFSYNCCOUNTER = $max_oos;
+		PrintMsg( "[$worker_name] rows processed: $i; in sync: $in_sync_counter, ",
 			  "out of: $out_of_sync_counter, missing in other db: $thisdb_only_counter, ",
 			  "summary out of sync: $OUTOFSYNCCOUNTER \n")  if ($DEBUG>1);
 	}
