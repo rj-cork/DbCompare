@@ -19,10 +19,6 @@ EMAIL=some.addres@somewhere.com
 OUTPUTLINES=1000 #max 1000 lines is send by email
 CONTINUE=""
 
-if [ "$1" == "CONTINUE" ]; then
-	CONTINUE="--continueonly"
-fi
-
 export ORACLE_HOME=/u01/app/11.2.0.3/grid
 export LD_LIBRARY_PATH=$ORACLE_HOME/lib
 export PATH=/bin:/usr/bin
@@ -30,11 +26,15 @@ export PATH=/bin:/usr/bin
 
 cd $DIR || exit 1
 
-[ -e "$LOGFILE.$MAXLOG" ] && rm -v $LOGFILE.$MAXLOG
-for ((i=$MAXLOG-1;i>0;i--)); do 
-	[ -e "$LOGFILE.$i" ] && mv -v $LOGFILE.$i $LOGFILE.$(($i+1))
-done
-mv -v $LOGFILE $LOGFILE.1
+if [ "$1" == "CONTINUE" ]; then
+	CONTINUE="--continueonly"
+else
+	[ -e "$LOGFILE.$MAXLOG" ] && rm -v $LOGFILE.$MAXLOG
+	for ((i=$MAXLOG-1;i>0;i--)); do 
+		[ -e "$LOGFILE.$i" ] && mv -v $LOGFILE.$i $LOGFILE.$(($i+1))
+	done
+	mv -v $LOGFILE $LOGFILE.1
+fi
 
 echo "==========================================" >> $OUTPUT
 echo "Started at "`date` >> $OUTPUT

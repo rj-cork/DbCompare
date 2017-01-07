@@ -878,7 +878,7 @@ sub LoadStateFile {
 		}
 	}
 	
-	return ($state_file{TABLES}, $state_file{REPORT});
+	return ($state_file{TABLES}, $state_file{REPORT}, $state_file{LOGFILE});
 }
 
 sub CreatePidfile {
@@ -918,6 +918,7 @@ sub SaveStateFile {
         my $f = shift;
 	$sav{'TABLES'} = shift;
 	$sav{'REPORT'} = shift;
+	$sav{'LOGFILE'} = shift;
 
         return if(!defined $f);
         
@@ -1391,7 +1392,7 @@ sub ProcessAllTables {
 			} 
 		} else {
 			delete $table_list->{$BASEDB}->{$table_name};
-			SaveStateFile($STATE_FILE, $table_list, $report);
+			SaveStateFile($STATE_FILE, $table_list, $report, $LOG_FILE);
 		}
 		close(STDERR_FROM_CHILD);
 	}
@@ -1400,7 +1401,7 @@ sub ProcessAllTables {
 
 	if ($STATE_FILE && -e $STATE_FILE && keys(%{$table_list->{$BASEDB}}) == 0) { #if no more tables to do, SaveStateFile will remove state file
 		#its in case there is state file without tables to do 
-		SaveStateFile($STATE_FILE, $table_list, $report);
+		SaveStateFile($STATE_FILE, $table_list, $report, $LOG_FILE);
 	}
 }
 
@@ -1421,12 +1422,17 @@ if (VerifyTime(@TIME_RANGES) == 0) {
 
 my $list;
 my $report = {};
+my $logfile;
 
 CreatePidfile();
 
 #TODO: do we load from file everything or starting list of table only which is re-processed?
 if ($STATE_FILE) {  #for now we are reprocessing old list
-	($list, $report) = LoadStateFile($STATE_FILE, \%DATABASES);
+	($list, $report, $logfile) = LoadStateFile($STATE_FILE, \%DATABASES);
+}
+
+if (!defined($LOG_FILE) && $logfile) { #if logfile not given use stored filename in state file
+	$LOG_FILE = $logfile;
 }
 
 if (not defined($list)) { #this is fresh start, no tables in statefile or no statefile

@@ -28,6 +28,7 @@ DataCompare.pm
 		 because SHA1 is calculated using columns not in PK/UK. Flag SWITCH_TO_CMP_PK_IF_NEEDED turn this on.
 		- add "FirstStageWorker: sql execution finished across all workers." message when all workers finish sql execution
 		 and start retrieving data
+		- total out of sync records calculation error in FirstStageWorker for more than 2 databases/connections
 	
 	1.17  
 		- add flag for skipping comparison of column type and column nullable flag --nochecktype --nochecknullable
