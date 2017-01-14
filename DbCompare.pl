@@ -2,7 +2,7 @@
 
 # DataCompare.pl - script and manual for comparing data in multiple 
 #		   schemas/tables across multiple databases
-# Version 1.07
+# Version 1.08
 # (C) 2016 - Radoslaw Karas <rj.cork@gmail.com>
 # 
 # This program is free software; you can redistribute it and/or modify
@@ -1018,10 +1018,10 @@ sub SigTerm {
 sub Terminate {
 	PrintMsg ERROR,"[$$] Terminate() - ",POSIX::strftime('%y/%m/%d %H:%M:%S', localtime),"\n";
 
-	if ($WORKER_PROCESS == 0) {
+	if (defined($CHILDREN{'child'})) { #is it child?
 		PrintMsg "Child process $$ - exiting.\n";
-	} else {
-		ShutdownWorker();
+	} else { #or parent?
+		ShutdownWorkers();
 		PrintMsg "Parent process $$ - exiting.\n";
         	if ( $PID_FILE && -e $PID_FILE &&  -f $PID_FILE && -W $PID_FILE ) { 
 			PrintMsg "Removing $PID_FILE.\n";
@@ -1031,25 +1031,30 @@ sub Terminate {
 	exit 1;
 }
 
-sub ShutdownWorker {
-	print STDERR "ShutdownWorker()\n";
-	if (defined($WORKER_PROCESS) && $WORKER_PROCESS) { #do we have a child or are we the child
+sub ShutdownWorkers {
+	my @pids = @_;
 
-		PrintMsg WARNING, "Killing child $WORKER_PROCESS by SIGTERM.\n";
-		kill 15, $WORKER_PROCESS;
-		sleep 5;
-	        my $child = waitpid($WORKER_PROCESS, WNOHANG);
-		if ($child > 0) {
-			PrintMsg WARNING, "Killed\n";
-		} else {
-			kill 9, $WORKER_PROCESS;
-			sleep 1;
-	        	waitpid($WORKER_PROCESS, 0); #zombie cleanup
-			PrintMsg WARNING, "Killed with 9\n";
+	PrintMsg "ShutdownWorkers(): ", join(', ',@pids), "\n";
+
+	if (not defined($CHILDREN{'child'})) { #do we have a child or are we the child
+
+		foreach my $p (@pids) {
+			PrintMsg WARNING, "Killing child $p by SIGTERM.\n";
+			kill 15, $p;
+			sleep 3;
+		        my $child = waitpid($p, WNOHANG);
+			if ($child ==  $p) {
+				PrintMsg WARNING, "Killed\n";
+			} else {
+				kill 9, $p;
+				sleep 2;
+		        	waitpid($p, 0); #zombie cleanup
+				PrintMsg WARNING, "Killed with 9\n";
+			}
 		}
 
 	} else { #shouldn't happen
-		PrintMsg WARNING, "ShutdownWorker(): no worker process\n";
+		PrintMsg WARNING, "ShutdownWorkers(): called from a child. Shouldn't happen. \n";
 	}
 
 }
@@ -1304,7 +1309,8 @@ sub ProcessAllTables {
 	my $marker_tm = time; #we will recognize which results are from actual run and which are loaded from state file
 	my $t = time;
 	my $pid;
-	my $pipe;
+	my ($pipe_r, $pipe_w);
+	my $selector = IO::Select->new();
 
 	while($table_name = (sort keys %{$table_list->{$BASEDB}})[0]) { #always first element/table from the array
 
@@ -1323,56 +1329,96 @@ sub ProcessAllTables {
 		}
 		
 		PrintMsg DEBUG1, "Starting DataCompare() with args: \n\t", join("\n\t--",split(' --', join(' ', @args))), "\n";
-
-		$pipe = IO::Pipe->new() or die "Cannot open pipe: $!";
-		$pipe->autoflush = 1;
-#`		$| = 1;
+		pipe ($pipe_r, $pipe_w) or die "$!";
 		$pid = fork();
+
+		#### this is child
 		if ($pid == 0) { #we are child
+			%CHILDREN = ('child' => 1);
 			$SIG{INT} = \&SigTerm;
 			$SIG{TERM} = \&SigTerm;
 			$SIG{CHLD} = \&SigTerm; #= "IGNORE"; ?? if ignored: (TODO)
 			$SIG{ALRM} = \&SigTerm;
 
-			close STDERR_FROM_CHILD;
-			open STDOUT, ">&".fileno(STDERR_TO_PARENT) or die "$!";
-			open STDERR, ">&".fileno(STDERR_TO_PARENT) or die "$!";
+			close $pipe_r;
+			open STDOUT, ">&".fileno($pipe_w) or die "$!";
+			open STDERR, ">&".fileno($pipe_w) or die "$!";
 			#perl 5.10 has GetOptions with args array as parameter but we want to be compatible with 5.8 
 			#so here is dirty hack
 			@ARGV = @args;  
 
 			DataCompare::DataCompare(); #go with table comparision
 			exit 0;
-		} # end of child
+		} 
+		#### end of child
 
-		#parent
-		close(STDERR_TO_PARENT); #the child has this end of pipe
+		#### parent
 
-		$CHILDREN{$WORKER_PROCESS} = { 'state' => 'prepare', 
-		my $child = 0;
-		my $s = IO::Select->new();
-                $s->add(\*STDERR_FROM_CHILD);
+		# setup new child 
+		close($pipe_w); #the child has this end of pipe
 
-		while ($child == 0) {
+		$CHILDREN{$pid} = { 'state' => 'prep', #prep|exec|recv|zomb
+				    'pipe_r' => $pipe_r };
 
-                       	last if ($child = waitpid($WORKER_PROCESS, WNOHANG));
-	
-			#read from child's STDOUT/ERR
-			if ($s->can_read(.1)) { #like sleep .1sec
-                       		if ($child = waitpid($WORKER_PROCESS, WNOHANG)) {
-					PrintMsg DEBUG1, 'Child ended with code: '.($? >> 8).'/'.($? & 127)."/$?\n";
+                $selector->add($pipe_r);
+
+		my $was_eof = 0; #if read gets eof it means child died and needs to be scrubbed
+		#wait in this loop until it can proceed with new table/partition
+		while (1) {
+			
+			my $kid = 0;
+			do { #scrub all terminated children
+
+				$kid = waitpid(-1, WNOHANG);
+				$selector->remove($CHILDREN{$kid}->{'pipe_r'}) or die "$!";
+				close($CHILDREN{$kid}->{'pipe_r'});
+				delete $CHILDREN{$kid};
+
+				if ($? != 0) {
+				#error situation
+					if ($? & 127) {
+						PrintMsg ERROR, 'Child died with signal ('.($? >> 8)."/$?). It will be restarted.\n";
+						#Restart the child and continue?
+					} else {
+						PrintMsg ERROR, 'Error from child '.($? >> 8)." ($?)\n";
+						exit 1;
+					} 
+				} else {
+					delete $table_list->{$BASEDB}->{$table_name};
+					SaveStateFile($STATE_FILE, $table_list, $report, $LOG_FILE);
 				}
-				if (my $in = <STDERR_FROM_CHILD>) {
+
+			} while ($kid > 0);
+
+			$was_eof = 0;
+
+			#check if we need to stay here or we can start new child
+			if (scalar(keys(%CHILDREN)) < 1) { #1 parallel process
+				#$proceed = 1;
+				last; # proceed with new child
+			}
+	
+			#read from children's STDOUT/ERR
+			foreach my $c ($selector->can_read(.1)) { #with sleep .1sec
+
+				if (my $in = <$c>) {
 					$report = PopulateReport ($report, $in, $table_name, $table_list, $marker_tm);
 				} else {
-					last;
+					$was_eof = 1;
+					#last; #EOF from some child? last for 
 				}
+        	               	#if ($child = waitpid($WORKER_PROCESS, WNOHANG)) {
+				#	PrintMsg DEBUG1, 'Child ended with code: '.($? >> 8).'/'.($? & 127)."/$?\n";
+				#}
+
 			}
+
+			next if ($was_eof); #check if any child died immediately
 
 			#check load/active sessions every 1 minute 
 			if ((time - $t) >= 60) {
 				if (CheckLoadLimits($dbs) < 0) {
-					ShutdownWorker(); 
+					ShutdownWorkers(keys %CHILDREN); 
 					$terminate = 100;
 					last;
 				}
@@ -1381,24 +1427,8 @@ sub ProcessAllTables {
 
                 }
 
-		$WORKER_PROCESS = undef; #there is no child any more
-
 		last if ($terminate); #worker killed, lets break main loop
 
-		if ($? != 0) {
-			#error situation
-			if ($? & 127) {
-				PrintMsg ERROR, 'Child died with signal ('.($? >> 8)."/$?). It will be restarted.\n";
-				#Restart the child and continue?
-			} else {
-				PrintMsg ERROR, 'Error from child '.($? >> 8)." ($?)\n";
-				exit 1;
-			} 
-		} else {
-			delete $table_list->{$BASEDB}->{$table_name};
-			SaveStateFile($STATE_FILE, $table_list, $report, $LOG_FILE);
-		}
-		close(STDERR_FROM_CHILD);
 	}
 
 	ReportResults($table_list->{$BASEDB}, $report, $marker_tm);
