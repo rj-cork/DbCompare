@@ -85,7 +85,7 @@ my $CONTINUE_ONLY = 0; #if 1 do not start unless there is job left to do from pr
 #my $WORKER_PROCESS;
 my $SKIP_PARTS_ROW_LIMIT = 5*1000*1000; #switch to partitions for tables bigger than 8mln rows -> taken from stats!
 my $PID_FILE;
-my %WORKERS; #hash containing all children information $child_pid => pipe, state of child (prepare|execute|receive) 
+my %CHILDREN; #hash containing all children information $child_pid => pipe, state of child (prepare|execute|receive) 
 
 sub PrintMsg {
 	my $m = shift;
@@ -923,6 +923,8 @@ sub SaveStateFile {
 	$sav{'LOGFILE'} = shift;
 
         return if(!defined $f);
+
+	PrintMsg DEBUG, "SaveStateFile(): Saving state in $f\n";
         
         if ( ! -e $f || ( -f $f && -W $f ) ) { 
 		if (scalar(keys(%{$sav{'TABLES'}->{$BASEDB}})) > 0) { #do we have any tables left to process?
@@ -1283,9 +1285,9 @@ sub PrepareArgs {
 		$info .= "\nUsing sha1";
 	}
 
-	if ($LOG_FILE) {
-		push @args, '--logfile', $LOG_FILE;
-	}	
+#	if ($LOG_FILE) {
+#		push @args, '--logfile', $LOG_FILE;
+#	}	
 
 	push @args, '--parallel', $PARALLEL;
 
@@ -1309,10 +1311,11 @@ sub ProcessAllTables {
 	my $marker_tm = time; #we will recognize which results are from actual run and which are loaded from state file
 	my $t = time;
 	my $pid;
-	my ($pipe_r, $pipe_w);
 	my $selector = IO::Select->new();
+	my %processed_tables; #hash with key = table being processed, value = pid
 
-	while($table_name = (sort keys %{$table_list->{$BASEDB}})[0]) { #always first element/table from the array
+	#always get first element/table from the array except tables marked in %processed_tables as being processed
+	while($table_name = (sort grep {!defined($processed_tables{$_})} keys %{$table_list->{$BASEDB}})[0]) { 
 
 		PrintMsg "\nProcessing $table_name ",POSIX::strftime('%y/%m/%d %H:%M:%S', localtime),"\n";
 		
@@ -1329,8 +1332,13 @@ sub ProcessAllTables {
 		}
 		
 		PrintMsg DEBUG1, "Starting DataCompare() with args: \n\t", join("\n\t--",split(' --', join(' ', @args))), "\n";
+
+		die "too many children" if (scalar(keys(%CHILDREN)) > 10); #hardcoded safety limit
+
+		my ($pipe_r, $pipe_w);
 		pipe ($pipe_r, $pipe_w) or die "$!";
 		$pid = fork();
+		$processed_tables{$table_name} = $pid; #needs to be removed when successfully processed
 
 		#### this is child
 		if ($pid == 0) { #we are child
@@ -1347,7 +1355,9 @@ sub ProcessAllTables {
 			#so here is dirty hack
 			@ARGV = @args;  
 
+			print STDERR "+++\n";
 			DataCompare::DataCompare(); #go with table comparision
+			print STDERR "---\n";
 			exit 0;
 		} 
 		#### end of child
@@ -1357,8 +1367,7 @@ sub ProcessAllTables {
 		# setup new child 
 		close($pipe_w); #the child has this end of pipe
 
-		$CHILDREN{$pid} = { 'state' => 'prep', #prep|exec|recv|zomb
-				    'pipe_r' => $pipe_r };
+		$CHILDREN{$pid} = { 'state' => 'prep' }; #prep|exec|recv|zomb
 
                 $selector->add($pipe_r);
 
@@ -1367,12 +1376,19 @@ sub ProcessAllTables {
 		while (1) {
 			
 			my $kid = 0;
-			do { #scrub all terminated children
 
-				$kid = waitpid(-1, WNOHANG);
-				$selector->remove($CHILDREN{$kid}->{'pipe_r'}) or die "$!";
-				close($CHILDREN{$kid}->{'pipe_r'});
+			#scrub all terminated children
+			while ( ($kid = waitpid(-1, WNOHANG)) > 0 ) {
+
+				PrintMsg DEBUG1, "ProcessAllTables(): scrubing $kid, exit code: $? \n";
+
 				delete $CHILDREN{$kid};
+				foreach my $t (keys %processed_tables) { #find which table $kid was processing
+					if ($processed_tables{$t} == $kid) {
+						delete $processed_tables{$t}; #clear as being processed
+						PrintMsg DEBUG1, "ProcessAllTables(): $t is not processed any more.\n";
+					}
+				}
 
 				if ($? != 0) {
 				#error situation
@@ -1383,18 +1399,22 @@ sub ProcessAllTables {
 						PrintMsg ERROR, 'Error from child '.($? >> 8)." ($?)\n";
 						exit 1;
 					} 
-				} else {
+				} else { #no error so this one is completed
 					delete $table_list->{$BASEDB}->{$table_name};
 					SaveStateFile($STATE_FILE, $table_list, $report, $LOG_FILE);
 				}
 
-			} while ($kid > 0);
+			}
 
 			$was_eof = 0;
 
 			#check if we need to stay here or we can start new child
-			if (scalar(keys(%CHILDREN)) < 1) { #1 parallel process
-				#$proceed = 1;
+			if (scalar(keys(%CHILDREN)) < 2) { #2 parallel process
+				my %states;
+				foreach my $c (keys %CHILDREN) {
+					$states{$CHILDREN{$c}->{'state'}}++;
+				}
+				PrintMsg DEBUG, "ProcessAllTables(): children states: ", join(",",%states), "\n";
 				last; # proceed with new child
 			}
 	
@@ -1402,14 +1422,13 @@ sub ProcessAllTables {
 			foreach my $c ($selector->can_read(.1)) { #with sleep .1sec
 
 				if (my $in = <$c>) {
+					PrintMsg DEBUG, fileno $c,"| [$in]\n";
 					$report = PopulateReport ($report, $in, $table_name, $table_list, $marker_tm);
 				} else {
 					$was_eof = 1;
-					#last; #EOF from some child? last for 
+					$selector->remove($c) or die "IO::Select->Remove: $!";
+					close($c);
 				}
-        	               	#if ($child = waitpid($WORKER_PROCESS, WNOHANG)) {
-				#	PrintMsg DEBUG1, 'Child ended with code: '.($? >> 8).'/'.($? & 127)."/$?\n";
-				#}
 
 			}
 
