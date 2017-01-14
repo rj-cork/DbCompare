@@ -34,6 +34,7 @@ use Data::Dumper;
 use Getopt::Long;
 use Pod::Usage;
 use POSIX qw(strftime :sys_wait_h :signal_h);
+use IO::Pipe;
 
 ####################################################################################
 #
@@ -81,9 +82,10 @@ my $LOG_FILE :shared; #needed for lock, DataCompare.pm loads threads
 my $PARALLEL = 4;
 my $MAX_LOAD_PER_INST = 0;
 my $CONTINUE_ONLY = 0; #if 1 do not start unless there is job left to do from previous run
-my $WORKER_PROCESS;
+#my $WORKER_PROCESS;
 my $SKIP_PARTS_ROW_LIMIT = 5*1000*1000; #switch to partitions for tables bigger than 8mln rows -> taken from stats!
 my $PID_FILE;
+my %WORKERS; #hash containing all children information $child_pid => pipe, state of child (prepare|execute|receive) 
 
 sub PrintMsg {
 	my $m = shift;
@@ -1301,6 +1303,8 @@ sub ProcessAllTables {
 	my @args;
 	my $marker_tm = time; #we will recognize which results are from actual run and which are loaded from state file
 	my $t = time;
+	my $pid;
+	my $pipe;
 
 	while($table_name = (sort keys %{$table_list->{$BASEDB}})[0]) { #always first element/table from the array
 
@@ -1320,12 +1324,11 @@ sub ProcessAllTables {
 		
 		PrintMsg DEBUG1, "Starting DataCompare() with args: \n\t", join("\n\t--",split(' --', join(' ', @args))), "\n";
 
-		pipe(STDERR_FROM_CHILD, STDERR_TO_PARENT) or die "Cannot open pipe: $!";
-		STDERR_FROM_CHILD->autoflush(1);
-		STDERR_TO_PARENT->autoflush(1);
-
-		$WORKER_PROCESS = fork();
-		if ($WORKER_PROCESS == 0) { #we are child
+		$pipe = IO::Pipe->new() or die "Cannot open pipe: $!";
+		$pipe->autoflush = 1;
+#`		$| = 1;
+		$pid = fork();
+		if ($pid == 0) { #we are child
 			$SIG{INT} = \&SigTerm;
 			$SIG{TERM} = \&SigTerm;
 			$SIG{CHLD} = \&SigTerm; #= "IGNORE"; ?? if ignored: (TODO)
@@ -1345,6 +1348,7 @@ sub ProcessAllTables {
 		#parent
 		close(STDERR_TO_PARENT); #the child has this end of pipe
 
+		$CHILDREN{$WORKER_PROCESS} = { 'state' => 'prepare', 
 		my $child = 0;
 		my $s = IO::Select->new();
                 $s->add(\*STDERR_FROM_CHILD);
