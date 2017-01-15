@@ -20,6 +20,7 @@
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 
+#TODO: SaveState is not parallel safe -> check case when only processed tables are left
 require 5.8.2;
 
 use strict;
@@ -1165,9 +1166,9 @@ sub PopulateReport {
 	my $marker_tm = shift; 
 
 	if ($in =~ /\sERROR:/ || $in =~ /\sWARNING:/) {
-		PrintMsg "\t$in";
+		PrintMsg "$in";
 	} else {
-		PrintMsg DEBUG1|DEBUGNOLOG, "\t$in";
+		PrintMsg DEBUG1|DEBUGNOLOG, "$in";
 	}
 	
 	if ($table_name !~ /^(?:([\w\d\$]+)\.)([\w\d\$]+)(?:\.([\w\d]+))?$/) {
@@ -1301,80 +1302,92 @@ sub PrepareArgs {
 	return @args;
 }
 
+sub SpawnNewProcess {
+	my ($args_ref, $table_name, $processed_tables_ref, $selector) = @_;
+	my ($pipe_r, $pipe_w);
+
+	PrintMsg DEBUG1, "Starting DataCompare() with args: \n\t", join("\n\t--",split(' --', join(' ', @{$args_ref}))), "\n";
+
+	die "too many children" if (scalar(keys(%CHILDREN)) > 10); #hardcoded safety limit
+
+	pipe ($pipe_r, $pipe_w) or die "$!";
+	my $pid = fork();
+	$processed_tables_ref->{$table_name} = $pid; #needs to be removed when successfully processed
+
+	#### this is child
+	if ($pid == 0) { #we are child
+		%CHILDREN = ('child' => 1);
+		$SIG{INT} = \&SigTerm;
+		$SIG{TERM} = \&SigTerm;
+		$SIG{CHLD} = \&SigTerm; #= "IGNORE"; ?? if ignored: (TODO)
+		$SIG{ALRM} = \&SigTerm;
+
+		close $pipe_r;
+		open STDOUT, ">&".fileno($pipe_w) or die "$!";
+		open STDERR, ">&".fileno($pipe_w) or die "$!";
+		#perl 5.10 has GetOptions with args array as parameter but we want to be compatible with 5.8 
+		#so here is dirty hack
+		@ARGV = @{$args_ref};  
+
+		DataCompare::DataCompare(1); #proceed with table comparision
+		exit 0;
+	} 
+	#### end of child
+
+	#### parent 
+
+	# setup new child 
+	close($pipe_w); #the child has this end of pipe
+
+	$CHILDREN{$pid} = { 'state' => 'prep', 'pipe' => $pipe_r }; #prep|exec|recv|zomb
+
+        return $pipe_r;
+}
+
 sub ProcessAllTables {
-	my $table_list = shift;
-	my $report = shift;
-	my $dbs = shift;
+	my ($table_list, $report, $dbs) = @_;
+
 	my $table_name;
-	my $terminate = 0;
-	my @args;
 	my $marker_tm = time; #we will recognize which results are from actual run and which are loaded from state file
 	my $t = time;
-	my $pid;
 	my $selector = IO::Select->new();
 	my %processed_tables; #hash with key = table being processed, value = pid
+	my $terminate = 0;
 
-	#always get first element/table from the array except tables marked in %processed_tables as being processed
-	while($table_name = (sort grep {!defined($processed_tables{$_})} keys %{$table_list->{$BASEDB}})[0]) { 
+	while(1) { 
 
-		PrintMsg "\nProcessing $table_name ",POSIX::strftime('%y/%m/%d %H:%M:%S', localtime),"\n";
-		
-		@args = PrepareArgs($dbs, $table_list, $table_name);
+		#always get first element/table from the array except tables marked in %processed_tables as being processed
+		$table_name = (sort grep {!defined($processed_tables{$_})} keys %{$table_list->{$BASEDB}})[0];
 
-		if ($TEST_ONLY) {
-			delete $table_list->{$BASEDB}->{$table_name};
-			next;
+		#break the loop if there are no more tables left and nothing is processed -> we're done
+		if (!defined($table_name) && scalar(keys(%processed_tables)) == 0) {
+			print STDERR "no more to process\n";
+			last;
 		}
 
 		if (VerifyTime(@TIME_RANGES) == 0) {
 			PrintMsg ERROR, "Stopping, I'm outside available time slots. (",POSIX::strftime('%y/%m/%d %H:%M:%S', localtime),")\n";
 			last;
 		}
+
+		if (defined($table_name)) { #do we have next table to process?
+
+			PrintMsg "\nProcessing $table_name ",POSIX::strftime('%y/%m/%d %H:%M:%S', localtime),"\n";
 		
-		PrintMsg DEBUG1, "Starting DataCompare() with args: \n\t", join("\n\t--",split(' --', join(' ', @args))), "\n";
+			if ($TEST_ONLY) {
+				delete $table_list->{$BASEDB}->{$table_name};
+				next;
+			}
 
-		die "too many children" if (scalar(keys(%CHILDREN)) > 10); #hardcoded safety limit
+			my @args = PrepareArgs($dbs, $table_list, $table_name);
 
-		my ($pipe_r, $pipe_w);
-		pipe ($pipe_r, $pipe_w) or die "$!";
-		$pid = fork();
-		$processed_tables{$table_name} = $pid; #needs to be removed when successfully processed
-
-		#### this is child
-		if ($pid == 0) { #we are child
-			%CHILDREN = ('child' => 1);
-			$SIG{INT} = \&SigTerm;
-			$SIG{TERM} = \&SigTerm;
-			$SIG{CHLD} = \&SigTerm; #= "IGNORE"; ?? if ignored: (TODO)
-			$SIG{ALRM} = \&SigTerm;
-
-			close $pipe_r;
-			open STDOUT, ">&".fileno($pipe_w) or die "$!";
-			open STDERR, ">&".fileno($pipe_w) or die "$!";
-			#perl 5.10 has GetOptions with args array as parameter but we want to be compatible with 5.8 
-			#so here is dirty hack
-			@ARGV = @args;  
-
-			print STDERR "+++\n";
-			DataCompare::DataCompare(); #go with table comparision
-			print STDERR "---\n";
-			exit 0;
-		} 
-		#### end of child
-
-		#### parent
-
-		# setup new child 
-		close($pipe_w); #the child has this end of pipe
-
-		$CHILDREN{$pid} = { 'state' => 'prep' }; #prep|exec|recv|zomb
-
-                $selector->add($pipe_r);
+			$selector->add(SpawnNewProcess(\@args, $table_name, \%processed_tables));
+		
+		}
 
 		my $was_eof = 0; #if read gets eof it means child died and needs to be scrubbed
 		#wait in this loop until it can proceed with new table/partition
 		while (1) {
-			
 			my $kid = 0;
 
 			#scrub all terminated children
@@ -1386,7 +1399,9 @@ sub ProcessAllTables {
 				foreach my $t (keys %processed_tables) { #find which table $kid was processing
 					if ($processed_tables{$t} == $kid) {
 						delete $processed_tables{$t}; #clear as being processed
+						$table_name = $t if (not defined($table_name));
 						PrintMsg DEBUG1, "ProcessAllTables(): $t is not processed any more.\n";
+						last;
 					}
 				}
 
@@ -1400,36 +1415,58 @@ sub ProcessAllTables {
 						exit 1;
 					} 
 				} else { #no error so this one is completed
+					PrintMsg DEBUG, "ProcessAllTables(): $table_name successfully processed.\n";
 					delete $table_list->{$BASEDB}->{$table_name};
 					SaveStateFile($STATE_FILE, $table_list, $report, $LOG_FILE);
 				}
 
 			}
 
-			$was_eof = 0;
-
-			#check if we need to stay here or we can start new child
+			#TODO: calculate it every 2 sec instead of sleep 1
+			#check if we need to stay here or we can start new child 
 			if (scalar(keys(%CHILDREN)) < 2) { #2 parallel process
 				my %states;
-				foreach my $c (keys %CHILDREN) {
+				foreach my $c (keys %CHILDREN) { #calculate how many children is in each state
 					$states{$CHILDREN{$c}->{'state'}}++;
 				}
 				PrintMsg DEBUG, "ProcessAllTables(): children states: ", join(",",%states), "\n";
-				last; # proceed with new child
+				if (1) {
+					sleep 1;
+					last; # proceed with new child
+				}
 			}
 	
+			$was_eof = 0;
+
 			#read from children's STDOUT/ERR
-			foreach my $c ($selector->can_read(.1)) { #with sleep .1sec
+			while (my @pipes = $selector->can_read(.3)) { #with sleep .1sec
+				foreach my $p (@pipes) { 
 
-				if (my $in = <$c>) {
-					PrintMsg DEBUG, fileno $c,"| [$in]\n";
-					$report = PopulateReport ($report, $in, $table_name, $table_list, $marker_tm);
-				} else {
-					$was_eof = 1;
-					$selector->remove($c) or die "IO::Select->Remove: $!";
-					close($c);
+					if (my $in = <$p>) {
+						if ($in =~ /FirstStageWorker: sql execution finished across all workers/) {
+							#find which child is that and change its state
+							foreach my $c (keys %CHILDREN) {
+								if ($CHILDREN{$c}->{'pipe'} == $p) {
+									$CHILDREN{$c}->{'state'} = 'recv';
+									last;
+								}
+							}
+						} elsif ($in =~ /FINISH \d+\/\d+\/\d+ \d+:\d+:\d+ /) {
+							#find which child is that and change its state
+                                                        foreach my $c (keys %CHILDREN) {
+                                                                if ($CHILDREN{$c}->{'pipe'} == $p) {
+                                                                        $CHILDREN{$c}->{'state'} = 'zomb';
+                                                                        last;
+                                                                }
+                                                        }
+						}
+						$report = PopulateReport ($report, $in, $table_name, $table_list, $marker_tm);
+					} else {
+						$was_eof = 1;
+						$selector->remove($p) or die "IO::Select->Remove: $!";
+						close($p);
+					}
 				}
-
 			}
 
 			next if ($was_eof); #check if any child died immediately

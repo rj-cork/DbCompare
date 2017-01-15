@@ -101,8 +101,9 @@ my $MAX_DIFFS = $MAX_ROWS*120; #maximum out of sync recorded records. it is sefe
 
 my $PARALLEL = ' /*+ PARALLEL(4) */ ';
 my $PARTITION = ''; #compare certain partition if given
-my @TABLENAMES;
+my $TABLENAME;
 my $DEBUG=0;
+my $PRINT_HEADER = 0; #print [schema.table.partition] header in each debug message
 my $CMP_COLUMN;
 my $SHIFT=10*60; #used if CMP_COLUMN defined - how much seconds back from now we are selecting data
 		# 10 minutes should be enough for data to be replicated from SRC to DST so (almost)a
@@ -121,15 +122,17 @@ my $SWITCH_TO_CMP_PK_IF_NEEDED = 1; #allow to switch automatically to PK/U compa
 
 
 sub PrintMsg {
+	my $h = '';
+	$h = "[> $TABLENAME".$PARTITION." <] " if ($PRINT_HEADER > 0);
 	if (defined($LOGFILE)) {
 		lock($LOGFILE);
 		my $f;
 
 		open $f,">>$LOGFILE";
-		print $f @_;
+		print $f $h, @_;
 		close $f;
 	}
-	print STDERR @_;
+	print STDERR $h, @_;
 }
 
 sub ReadKey {
@@ -171,7 +174,7 @@ sub GetParams {
 	my ($part,$partfor);
 
 	GetOptions ('db|d=s' => \@DBS,
-		    'table|t=s' => \@TABLENAMES,
+		    'table|t=s' => \$TABLENAME,
 		    'compare|c=s' => \$CMP_COLUMN,
 		    'keyonly'=> \$CMP_KEY_ONLY,
 		    'excludecolumn|excludecol=s' => \@exclude_cols,
@@ -235,7 +238,7 @@ sub GetParams {
 		$i++;
 	}
 
-	if (scalar(@TABLENAMES) == 0) {
+	if (not defined($TABLENAME)) {
 		PrintMsg "ERROR: Table name is needed. --table=[owner.]table_name\n";
 		exit 1;
 	} 
@@ -247,7 +250,7 @@ sub GetParams {
 		} else { #for now we accept only one table, in future there will be some
 			# oldschema.oldtable:newschema.newtable
 			$MAPPINGS{$m} = uc($maps{$m});
-			# at the moment oldschema.oldtable is always the same: $TABLENAMES[0]
+			# at the moment oldschema.oldtable is always the same: $TABLENAMES[0] -> changed to $TABLENAME 15.01.2017
 			# so map is just newschema.newtable
 		}
 	}
@@ -280,7 +283,8 @@ sub GetParams {
 
 	$PARALLEL = " /*+ PARALLEL($concurency) */ " if (defined $concurency);
 	$CMP_COLUMN = uc($CMP_COLUMN) if (defined($CMP_COLUMN));
-	@TABLENAMES = split(/,/,uc(join(',',@TABLENAMES)));
+	#@TABLENAMES = split(/,/,uc(join(',',@TABLENAMES)));
+	$TABLENAME = uc($TABLENAME);
 
 	if (defined($CMP_COLUMN) && $CMP_KEY_ONLY > 0) {
 		PrintMsg "ERROR: Parameters --compare and --keyonly are mutual exclusive.\n";
@@ -565,7 +569,7 @@ sub FirstStageWorker {
 
 	my $dbh;
 	my $thisdb = $DATABASES{$worker_name};
-	my $tablename = ResolveMapping($TABLENAMES[0], $worker_name);
+	my $tablename = ResolveMapping($TABLENAME, $worker_name);
 
 	PrintMsg "FirstStageWorker[$worker_name] start - table: $tablename, ";
 	if ($PARTMAPPINGS{$worker_name}) {
@@ -821,7 +825,7 @@ sub SecondStagePrepSql {
 
 	my $dbh = shift;
 	my $dbname = shift;
-	my $tablename = ResolveMapping($TABLENAMES[0], $dbname);
+	my $tablename = ResolveMapping($TABLENAME, $dbname);
 
 	$dbh->{RaiseError} = 1;
         $dbh->{RowCacheSize} = 1;
@@ -1025,11 +1029,15 @@ sub FinalResults {
 
 
 sub DataCompare {
-	my $opts_ref = shift;
+	my ($print_header,$opts_ref) = @_;
 	my $t = time;
 	my @WORKERS;
 
+
 	GetParams($opts_ref);
+	
+	$print_header =1;
+	$PRINT_HEADER = $print_header if (defined($print_header));
 	$RUNNING = 0;
 	$COLSFILLED = 0;
 
