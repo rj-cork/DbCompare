@@ -77,6 +77,8 @@ my %TABLE_CMP_COLUMNS;
 my %TABLE_EXCLUDE_COLUMNS;
 my @CMP_COLUMNS;
 my @CMP_KEY_ONLY;
+my $MAX_PARALLEL = 2; #how many parallel processed objects, there can be only 1 in preparing/execute state, 
+			#the rest parallel processes can be receiving data only, set to 1 to disable adaptive parallelisation
 my $TEST_ONLY = 0;
 my $STATE_FILE;
 my $LOG_FILE :shared; #needed for lock, DataCompare.pm loads threads
@@ -1286,9 +1288,9 @@ sub PrepareArgs {
 		$info .= "\nUsing sha1";
 	}
 
-#	if ($LOG_FILE) {
-#		push @args, '--logfile', $LOG_FILE;
-#	}	
+	if ($LOG_FILE) {
+		push @args, '--logfile', $LOG_FILE;
+	}	
 
 	push @args, '--parallel', $PARALLEL;
 
@@ -1339,7 +1341,7 @@ sub SpawnNewProcess {
 	# setup new child 
 	close($pipe_w); #the child has this end of pipe
 
-	$CHILDREN{$pid} = { 'state' => 'prep', 'pipe' => $pipe_r }; #prep|exec|recv|zomb
+	$CHILDREN{$pid} = { 'state' => 'prep', 'pipe' => $pipe_r }; #prep|exec|recv
 
         return $pipe_r;
 }
@@ -1350,6 +1352,7 @@ sub ProcessAllTables {
 	my $table_name;
 	my $marker_tm = time; #we will recognize which results are from actual run and which are loaded from state file
 	my $t = time;
+	my $t_par = time;
 	my $selector = IO::Select->new();
 	my %processed_tables; #hash with key = table being processed, value = pid
 	my $terminate = 0;
@@ -1422,16 +1425,19 @@ sub ProcessAllTables {
 
 			}
 
-			#TODO: calculate it every 2 sec instead of sleep 1
 			#check if we need to stay here or we can start new child 
-			if (scalar(keys(%CHILDREN)) < 2) { #2 parallel process
-				my %states;
+			last if (scalar(keys(%CHILDREN)) == 0); #start new process imediatelly
+
+			#calculate every 2 sec whether enable processing in parallel
+			if (time - $t_par >=3 && scalar(keys(%CHILDREN)) < $MAX_PARALLEL) { # parallel process
+				$t_par = time;
+				my %states = ( 'prep'=>0, 'exec'=>0, 'recv'=>0 );
 				foreach my $c (keys %CHILDREN) { #calculate how many children is in each state
 					$states{$CHILDREN{$c}->{'state'}}++;
 				}
-				PrintMsg DEBUG, "ProcessAllTables(): children states: ", join(",",%states), "\n";
-				if (1) {
-					sleep 1;
+				PrintMsg DEBUG2, "ProcessAllTables(): children states: ", join(",",%states), "\n";
+				if ($states{'prep'} + $states{'exec'} == 0) {
+					PrintMsg DEBUG, "ProcessAllTables(): No process in prep/exec state out of ",scalar(keys(%CHILDREN)),".\n";
 					last; # proceed with new child
 				}
 			}
@@ -1451,14 +1457,6 @@ sub ProcessAllTables {
 									last;
 								}
 							}
-						} elsif ($in =~ /FINISH \d+\/\d+\/\d+ \d+:\d+:\d+ /) {
-							#find which child is that and change its state
-                                                        foreach my $c (keys %CHILDREN) {
-                                                                if ($CHILDREN{$c}->{'pipe'} == $p) {
-                                                                        $CHILDREN{$c}->{'state'} = 'zomb';
-                                                                        last;
-                                                                }
-                                                        }
 						}
 						$report = PopulateReport ($report, $in, $table_name, $table_list, $marker_tm);
 					} else {
