@@ -2,27 +2,37 @@ Revision history for DbCompare and DataCompare scripts
 
 DbCompare.pl
 
-	1.02 
-		- excluding columns
+	1.08 	
+		- adaptive parallelisation added, up to 3 parallel processes with no more than 1 that is preparing/executing query 
+
+	1.07 
+		- tables with $ were handled incorrectly
+
+	1.06 
+		- missing Pod::Usage, changes in manual
+
+	1.05 
+		- fix in GetTableList (uc table name)
+
+	1.04 
+		- add pk/uk comparison (no additional column nor sha1)
 
 	1.03 
 		- posibility for providing tablenames in --schema parameter alternative --table
 		- fix infinite loop if --test flag is used
 
-	1.04 
-		- add pk/uk comparison (no additional column nor sha1)
+	1.02 
+		- excluding of columns
 
-	1.05 
-		- fix in GetTableList (uc table name)
 
-	1.06 
-		- missing Pod::Usage, changes in manual
 
-	1.07 
-		- tables with $ were handled incorrectly
+
 
 DataCompare.pm 
-	
+
+	1.19
+		- DataCompare()	is passing argument whether add "[$TABLENAME.$PARTITION] " prefix to every output line
+
 	1.18
 		- if there are PK/UK columns only in the table and we are about to check SHA1 then switch to keycompare more
 		 because SHA1 is calculated using columns not in PK/UK. Flag SWITCH_TO_CMP_PK_IF_NEEDED turn this on.

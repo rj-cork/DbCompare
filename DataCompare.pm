@@ -1,7 +1,7 @@
 package DataCompare;
 
 # DataCompare package - functions for comparing data in multiple tables/table partitions
-# Version 1.18
+# Version 1.19
 # (C) 2016 - Radoslaw Karas <rj.cork@gmail.com>
 # 
 # This program is free software; you can redistribute it and/or modify
@@ -27,7 +27,6 @@ use Thread::Queue;
 use POSIX;
 use DBI;
 use DBD::Oracle qw(:ora_types);
-
 use Time::HiRes;
 use Getopt::Long;
 use Data::Dumper;
@@ -123,7 +122,7 @@ my $SWITCH_TO_CMP_PK_IF_NEEDED = 1; #allow to switch automatically to PK/U compa
 
 sub PrintMsg {
 	my $h = '';
-	$h = "[> $TABLENAME".$PARTITION." <] " if ($PRINT_HEADER > 0);
+	$h = "[$TABLENAME".(($PARTITION)?" $PARTITION":'')."] " if ($PRINT_HEADER > 0);
 	if (defined($LOGFILE)) {
 		lock($LOGFILE);
 		my $f;
@@ -435,12 +434,12 @@ sub GetPrimaryKey {
 		PrintMsg ("GetPrimaryKey($wname): Constraint PK/U verified correctly\n") if ($u_found+$pk_found>0 && $DEBUG>0);
 	} else { #this is first worker to retrieve PK/UK information
 		if ($DEBUG>0) { 
-			PrintMsg ("GetPrimaryKey($wname): ");
+			my $str = "GetPrimaryKey($wname): ";
 			foreach my $i (sort { $COLUMNS{$a}->{CPOSITON} <=> $COLUMNS{$b}->{CPOSITON} } grep {defined $COLUMNS{$_}->{CPOSITON}} keys %COLUMNS) {
 				 $cname = "(constraint name: ".$COLUMNS{$i}->{CONSTRAINT_NAME}.', type: '.$COLUMNS{$i}->{CONSTRAINT}.')';
-				 PrintMsg ("$i ");
+				 $str .= "$i ";
 			}
-			PrintMsg ("$cname\n");
+			PrintMsg ("$str $cname\n");
 		}
 	}
 
@@ -571,19 +570,19 @@ sub FirstStageWorker {
 	my $thisdb = $DATABASES{$worker_name};
 	my $tablename = ResolveMapping($TABLENAME, $worker_name);
 
-	PrintMsg "FirstStageWorker[$worker_name] start - table: $tablename, ";
+	my $msg = "FirstStageWorker[$worker_name] start - table: $tablename, ";
 	if ($PARTMAPPINGS{$worker_name}) {
-		PrintMsg "partition mapped to: ".join(', ',@{$PARTMAPPINGS{$worker_name}}).", ";
+		$msg .= "partition mapped to: ".join(', ',@{$PARTMAPPINGS{$worker_name}}).", ";
 	} else {
-		PrintMsg "partition: $PARTITION, " if ($PARTITION);
+		$msg .= "partition: $PARTITION, " if ($PARTITION);
 	}
 
 	if ($CMP_COLUMN) {
-		PrintMsg ("compare using column $CMP_COLUMN \n");
+		PrintMsg ("$msg compare using column $CMP_COLUMN \n");
 	} elsif ($CMP_KEY_ONLY) {
-		PrintMsg ("compare using PK/UK columns only \n");
+		PrintMsg ("$msg compare using PK/UK columns only \n");
 	} else {
-		PrintMsg ("compare using SHA1 on all columns\n");
+		PrintMsg ("$msg compare using SHA1 on all columns\n");
 	}
 
 	{
@@ -860,7 +859,9 @@ sub SecondStageGetRow {
 	my $dbname = shift;
 
 	my @key_data = split(/\|/,$key);
-	PrintMsg( "[$dbname] PK/U: ", join(',',@key_data)," ") if ($DEBUG>1);
+	my $msg;
+
+	$msg = "[$dbname] PK/U: ".(join(',',@key_data)." ") if ($DEBUG>1);
 
 	$prep->execute(@key_data) or do {
 		$RUNNING = -112;
@@ -881,7 +882,7 @@ sub SecondStageGetRow {
 		return undef;
 	}
 
-	PrintMsg((defined $ret_val)?"$ret_val\n":"null\n") if ($DEBUG>1);
+	PrintMsg($msg, (defined $ret_val)?"$ret_val\n":"null\n") if ($DEBUG>1);
 
 
 	return $ret_val;

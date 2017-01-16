@@ -29,12 +29,12 @@ use File::Basename;
 use lib (dirname(Cwd::abs_path($0)));
 use DataCompare;
 use Storable;
-use IO::Select;
-use IO::Handle;
 use Data::Dumper;
 use Getopt::Long;
 use Pod::Usage;
 use POSIX qw(strftime :sys_wait_h :signal_h);
+use IO::Select;
+use IO::Handle;
 use IO::Pipe;
 
 ####################################################################################
@@ -77,7 +77,7 @@ my %TABLE_CMP_COLUMNS;
 my %TABLE_EXCLUDE_COLUMNS;
 my @CMP_COLUMNS;
 my @CMP_KEY_ONLY;
-my $MAX_PARALLEL = 1; #how many parallel processed objects, there can be only 1 in preparing/execute state, 
+my $MAX_PARALLEL = 2; #how many parallel processed objects, there can be only 1 in preparing/execute state, 
 			#the rest parallel processes can be receiving data only, set to 1 to disable adaptive parallelisation
 my $TEST_ONLY = 0;
 my $STATE_FILE;
@@ -1306,27 +1306,27 @@ sub PrepareArgs {
 
 sub SpawnNewProcess {
 	my ($args_ref, $table_name, $processed_tables_ref, $selector) = @_;
-	my ($pipe_r, $pipe_w);
 
 	PrintMsg DEBUG1, "Starting DataCompare() with args: \n\t", join("\n\t--",split(' --', join(' ', @{$args_ref}))), "\n";
 
 	die "too many children" if (scalar(keys(%CHILDREN)) > 10); #hardcoded safety limit
 
-	pipe ($pipe_r, $pipe_w) or die "$!";
+	my $pipe = new IO::Pipe or die "$!";
 	my $pid = fork();
 	$processed_tables_ref->{$table_name} = $pid; #needs to be removed when successfully processed
 
 	#### this is child
 	if ($pid == 0) { #we are child
-		%CHILDREN = ('child' => 1);
+		%CHILDREN = ('child' => 1); #clear CHILDREN hash, we are child
 		$SIG{INT} = \&SigTerm;
 		$SIG{TERM} = \&SigTerm;
 		$SIG{CHLD} = \&SigTerm; #= "IGNORE"; ?? if ignored: (TODO)
 		$SIG{ALRM} = \&SigTerm;
 
-		close $pipe_r;
-		open STDOUT, ">&".fileno($pipe_w) or die "$!";
-		open STDERR, ">&".fileno($pipe_w) or die "$!";
+		$pipe->writer(); #close $pipe_r;
+		$pipe->autoflush(1);
+		open STDOUT, ">&".fileno($pipe) or die "$!";
+		open STDERR, ">&".fileno($pipe) or die "$!";
 		#perl 5.10 has GetOptions with args array as parameter but we want to be compatible with 5.8 
 		#so here is dirty hack
 		@ARGV = @{$args_ref};  
@@ -1339,11 +1339,15 @@ sub SpawnNewProcess {
 	#### parent 
 
 	# setup new child 
-	close($pipe_w); #the child has this end of pipe
+	$pipe->reader(); #close($pipe_w); #the child has this end of pipe
 
-	$CHILDREN{$pid} = { 'state' => 'prep', 'pipe' => $pipe_r }; #prep|exec|recv
+	$CHILDREN{$pid} = { 'state' => 'prep', #prep|exec|recv
+				'pipe' => $pipe, 
+				'fileno' => fileno($pipe), 
+				'tablename'=> $table_name,
+			 }; 
 
-        return $pipe_r;
+        return $pipe;
 }
 
 sub ProcessAllTables {
@@ -1398,15 +1402,21 @@ sub ProcessAllTables {
 
 				PrintMsg DEBUG1, "ProcessAllTables(): scrubing $kid, exit code: $? \n";
 
+				$table_name = undef;
 				delete $CHILDREN{$kid};
 				foreach my $t (keys %processed_tables) { #find which table $kid was processing
 					if ($processed_tables{$t} == $kid) {
 						delete $processed_tables{$t}; #clear as being processed
-						$table_name = $t if (not defined($table_name));
+						$table_name = $t;# what is the tablename of finished process
 						PrintMsg DEBUG1, "ProcessAllTables(): $t is not processed any more.\n";
 						last;
 					}
 				}
+
+				if (not defined($table_name)) {
+					PrintMsg ERROR, "ProcessAllTables(): Cannot find what was the last processed table. Exiting. \n";
+					exit 1;
+				}			
 
 				if ($? != 0) {
 				#error situation
@@ -1445,18 +1455,25 @@ sub ProcessAllTables {
 			$was_eof = 0;
 
 			#read from children's STDOUT/ERR
-			while (my @pipes = $selector->can_read(.3)) { #with sleep .1sec
+			while (my @pipes = $selector->can_read(.2)) { #with sleep 1/5sec
 				foreach my $p (@pipes) { 
 
-					if (my $in = <$p>) {
+					my $c = undef;
+					foreach my $z (keys %CHILDREN) {
+						if ($CHILDREN{$z}->{'pipe'} == $p && $CHILDREN{$z}->{'fileno'} == fileno($p)) {
+							$table_name = $CHILDREN{$z}->{'tablename'};
+							$c = $z;
+						}
+					}
+
+					if (not defined($c)) {
+						PrintMsg ERROR, "ProcessAllTables(): Cannot find what process sent last line. Exiting. \n";
+						exit 1;
+					}			
+
+					if (my $in = $p->getline()) {
 						if ($in =~ /FirstStageWorker: sql execution finished across all workers/) {
-							#find which child is that and change its state
-							foreach my $c (keys %CHILDREN) {
-								if ($CHILDREN{$c}->{'pipe'} == $p) {
-									$CHILDREN{$c}->{'state'} = 'recv';
-									last;
-								}
-							}
+							$CHILDREN{$c}->{'state'} = 'recv';
 						}
 						$report = PopulateReport ($report, $in, $table_name, $table_list, $marker_tm);
 					} else {
