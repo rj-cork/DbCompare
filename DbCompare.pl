@@ -77,7 +77,7 @@ my %TABLE_CMP_COLUMNS;
 my %TABLE_EXCLUDE_COLUMNS;
 my @CMP_COLUMNS;
 my @CMP_KEY_ONLY;
-my $MAX_PARALLEL = 2; #how many parallel processed objects, there can be only 1 in preparing/execute state, 
+my $MAX_PARALLEL = 3; #how many parallel processed objects, there can be only 1 in preparing/execute state, 
 			#the rest parallel processes can be receiving data only, set to 1 to disable adaptive parallelisation
 my $TEST_ONLY = 0;
 my $STATE_FILE;
@@ -1468,6 +1468,7 @@ sub ProcessAllTables {
 
 					if (not defined($c)) {
 						PrintMsg ERROR, "ProcessAllTables(): Cannot find what process sent last line. Exiting. \n";
+						PrintMsg ERROR, "ProcessAllTables(): [", $p->getline(), "].\n";
 						exit 1;
 					}			
 
