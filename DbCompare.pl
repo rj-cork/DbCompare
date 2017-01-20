@@ -1340,6 +1340,7 @@ sub SpawnNewProcess {
 
 	# setup new child 
 	$pipe->reader(); #close($pipe_w); #the child has this end of pipe
+	#$pipe->blocking(0);
 
 	$CHILDREN{$pid} = { 'state' => 'prep', #prep|exec|recv
 				'pipe' => $pipe, 
@@ -1402,6 +1403,14 @@ sub ProcessAllTables {
 
 				PrintMsg DEBUG1, "ProcessAllTables(): scrubing $kid, exit code: $? \n";
 
+#{
+#				my $pi = $CHILDREN{$kid}->{'pipe'};
+#				my $l;
+#				while($l=<$pi>) {
+#					PrintMsg DEBUG1, "ProcessAllTables(): [$kid] purging pipe: $l\n";
+#				}
+#				$selector->remove($pi) or die "IO::Select->Remove: $!";
+#}
 				$table_name = undef;
 				delete $CHILDREN{$kid};
 				foreach my $t (keys %processed_tables) { #find which table $kid was processing
@@ -1412,6 +1421,7 @@ sub ProcessAllTables {
 						last;
 					}
 				}
+
 
 				if (not defined($table_name)) {
 					PrintMsg ERROR, "ProcessAllTables(): Cannot find what was the last processed table. Exiting. \n";
@@ -1469,15 +1479,16 @@ sub ProcessAllTables {
 					if (not defined($c)) {
 						PrintMsg ERROR, "ProcessAllTables(): Cannot find what process sent last line. Exiting. \n";
 						PrintMsg ERROR, "ProcessAllTables(): [", $p->getline(), "].\n";
+						PrintMsg DEBUG1, "fno: ",fileno($p)," ",Dumper(\%CHILDREN),"\n";
 						exit 1;
 					}			
-
+#TODO: if to while?
 					if (my $in = $p->getline()) {
 						if ($in =~ /FirstStageWorker: sql execution finished across all workers/) {
 							$CHILDREN{$c}->{'state'} = 'recv';
 						}
 						$report = PopulateReport ($report, $in, $table_name, $table_list, $marker_tm);
-					} else {
+					} elsif (eof($p)) {
 						$was_eof = 1;
 						$selector->remove($p) or die "IO::Select->Remove: $!";
 						close($p);

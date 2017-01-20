@@ -122,7 +122,7 @@ my $SWITCH_TO_CMP_PK_IF_NEEDED = 1; #allow to switch automatically to PK/U compa
 
 sub PrintMsg {
 	my $h = '';
-	$h = "[$TABLENAME".(($PARTITION)?" $PARTITION":'')."] " if ($PRINT_HEADER > 0);
+	$h = "[$$ $TABLENAME".(($PARTITION)?" $PARTITION":'')."] " if ($PRINT_HEADER > 0);
 	if (defined($LOGFILE)) {
 		lock($LOGFILE);
 		my $f;
