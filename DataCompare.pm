@@ -1,7 +1,7 @@
 package DataCompare;
 
 # DataCompare package - functions for comparing data in multiple tables/table partitions
-# Version 1.19
+# Version 1.20
 # (C) 2016 - Radoslaw Karas <rj.cork@gmail.com>
 # 
 # This program is free software; you can redistribute it and/or modify

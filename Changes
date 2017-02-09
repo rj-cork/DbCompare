@@ -30,6 +30,9 @@ DbCompare.pl
 
 DataCompare.pm 
 
+	1.20
+		- PrintMsg printing to STDERR didn't flush properly when duplicated with end of a pipe
+
 	1.19
 		- DataCompare()	is passing argument whether add "[$TABLENAME.$PARTITION] " prefix to every output line
 
