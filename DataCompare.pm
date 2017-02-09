@@ -32,6 +32,7 @@ use Getopt::Long;
 use Data::Dumper;
 use Storable qw(freeze thaw dclone);
 use Pod::Usage;
+use FileHandle;
 
 #
 #  1) Read parameters GetParams()
@@ -132,6 +133,7 @@ sub PrintMsg {
 		close $f;
 	}
 	print STDERR $h, @_;
+	STDERR->flush(); #force flushing - it may be end of a pipe
 }
 
 sub ReadKey {
