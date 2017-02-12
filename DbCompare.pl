@@ -2,7 +2,7 @@
 
 # DataCompare.pl - script and manual for comparing data in multiple 
 #		   schemas/tables across multiple databases
-# Version 1.08
+# Version 1.09
 # (C) 2016 - Radoslaw Karas <rj.cork@gmail.com>
 # 
 # This program is free software; you can redistribute it and/or modify
@@ -20,7 +20,6 @@
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 
-#TODO: SaveState is not parallel safe -> check case when only processed tables are left
 require 5.8.2;
 
 use strict;
@@ -1016,8 +1015,9 @@ sub CheckLoadLimits { #check database load / child mem usage(TODO?)
 
 sub SigTerm {
 	PrintMsg ERROR,"[$$] SigTerm(): $? ",POSIX::strftime('%y/%m/%d %H:%M:%S', localtime),"\n";
-	$SIG{CHLD} = \&SigTerm;
-	$SIG{ALRM} = \&SigTerm;
+#	$SIG{CHLD} = \&SigTerm;
+#	$SIG{ALRM} = \&SigTerm;
+	Terminate();
 }
 
 sub Terminate {
@@ -1026,7 +1026,7 @@ sub Terminate {
 	if (defined($CHILDREN{'child'})) { #is it child?
 		PrintMsg "Child process $$ - exiting.\n";
 	} else { #or parent?
-		ShutdownWorkers();
+		ShutdownWorkers(keys %CHILDREN);
 		PrintMsg "Parent process $$ - exiting.\n";
         	if ( $PID_FILE && -e $PID_FILE &&  -f $PID_FILE && -W $PID_FILE ) { 
 			PrintMsg "Removing $PID_FILE.\n";
@@ -1038,6 +1038,8 @@ sub Terminate {
 
 sub ShutdownWorkers {
 	my @pids = @_;
+
+	@pids = keys %CHILDREN if (scalar(@pids) == 0);
 
 	PrintMsg "ShutdownWorkers(): ", join(', ',@pids), "\n";
 
@@ -1403,14 +1405,18 @@ sub ProcessAllTables {
 
 				PrintMsg DEBUG1, "ProcessAllTables(): scrubing $kid, exit code: $? \n";
 
-#{
-#				my $pi = $CHILDREN{$kid}->{'pipe'};
-#				my $l;
-#				while($l=<$pi>) {
-#					PrintMsg DEBUG1, "ProcessAllTables(): [$kid] purging pipe: $l\n";
-#				}
-#				$selector->remove($pi) or die "IO::Select->Remove: $!";
-#}
+				#fix race condition between removing finished child and select that returns some leftovers
+				my $pi = $CHILDREN{$kid}->{'pipe'};
+				if (!eof($pi)) { 
+					my $l;
+					while($l = <$pi>) {
+						PrintMsg WARNING, "ProcessAllTables(): [$kid] purging pipe: $l\n";
+						$report = PopulateReport ($report, $l, $table_name, $table_list, $marker_tm);
+					}
+					close($pi);
+					$selector->remove($pi) or die "IO::Select->Remove: $!";
+				}
+
 				$table_name = undef;
 				delete $CHILDREN{$kid};
 				foreach my $t (keys %processed_tables) { #find which table $kid was processing

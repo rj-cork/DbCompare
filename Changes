@@ -2,6 +2,10 @@ Revision history for DbCompare and DataCompare scripts
 
 DbCompare.pl
 
+	1.09 	
+		- parent process when dying didn't kill all child processes
+		- fix race condition in ProcessAllTables between removing terminated child and select that returned some leftovers
+
 	1.08 	
 		- adaptive parallelisation added, up to 3 parallel processes with no more than 1 that is preparing/executing query 
 
