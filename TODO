@@ -4,13 +4,25 @@ DataCompare:
 	
 
 DbCompare: 
+	- change $0 to scriptname, current table and comparing parameters
+
+	- change parameter name `compare` to `comparecolumn`
+
+	- add pseudo partitioning. Big tables should be compared in fragments/ranges in PK, taken from stats? group by on i_FFS?
+		select * from (
+			select /*+ aindex_ffs(a WRH$_BG_EVENT_SUMMARY_PK) */ DBID,SNAP_ID,INSTANCE_NUMBER,EVENT_ID,CON_DBID,rownum rn from sys.WRH$_BG_EVENT_SUMMARY a order by 1,2,3,4,5
+		) where rn in (round(6144961/10), round(6144961/10*2),round(6144961/10*3),round(6144961/10*4),round(6144961/10*5),round(6144961/10*6),round(6144961/10*7),round(6144961/10*8),round(6144961/10*9));
+		what is faster i_FFS+sort_FS or i_FS?
+
+		may be use just sample select:
+		select num_rows from dba_tables where table_name='SOMETABLE';-- gives 6000000, so to get 50 rows: 50/6000000*100=.0008
+		select * from (
+			select pk_col1,pk_col2,pk_col3 from sometable sample (0.0008)
+		) order by 1,2,3;
+
+	- if there is more than 1 unique indexes choose 1) local partitioned 2) smaller
+
 	- if DataCompare returns error like too many out of sync records it should skip this table and continue with next one
-
-	- in case comparison is done using PK (or some column in smaller degree) the majority of processing time is spent on sending data through the network
-		and comparing in DbCompare script. If CPU on server running DbCompare is not a constraint we can start comparison of next table/partition
-		just after first rows are received from the (last) compared database. It may be limited/connected somehow with DbCompare parallelism.
-
-	- add parallelism in case multiple tables/partitions - may be implemented as fork, parallel writing of output should be resolved 
 
 	- it there is no PK nor UK on table it could be skipped, can this be changed to all columns like in GG replication?
 
