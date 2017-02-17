@@ -2,7 +2,7 @@
 
 # DataCompare.pl - script and manual for comparing data in multiple 
 #		   schemas/tables across multiple databases
-# Version 1.09
+# Version 1.10
 # (C) 2016 - Radoslaw Karas <rj.cork@gmail.com>
 # 
 # This program is free software; you can redistribute it and/or modify
@@ -151,7 +151,7 @@ sub GetParams {
 	    'basedb|primary=s' => \$basedb,
 	    'auxuser=s' => \$auxuser,
 	    'schema|table|s=s' => \@SCHEMAS,
-	    'compare|c=s' => \@CMP_COLUMNS,
+	    'comparecolumn|comparecol|c=s' => \@CMP_COLUMNS,
 	    'comparekey=s' => \@CMP_KEY_ONLY,
 	    'continueonly' => \$CONTINUE_ONLY,
             'verbose|v+' => \$DEBUG,
@@ -504,12 +504,14 @@ sub GetAllTables {
 			exit 1;
 		}
 		foreach my $s (@{$schemas}) {
+			my $h_ref;
 				# $1 (obligatory) - schema, $2 (optional) - table 
 			if ($s =~ /^([\w\d\?\*%]+)(?:\.([\w\d\$\?\*%]+))?$/) { 
-				$table_list{$db} = GetTableList($dbh, $1, $2);
+				$h_ref = GetTableList($dbh, $1, $2);
 			} else {
-				$table_list{$db} = GetTableList($dbh, $s);
+				$h_ref = GetTableList($dbh, $s);
 			}
+			map {$table_list{$db}->{$_} = $h_ref->{$_}} keys %{$h_ref};
 		}
 	}
 
@@ -774,7 +776,7 @@ sub RemapAllTables {
 	}
 }
 
-# --compare [schema1.][tablename1.]column_name --compare [schema1.][t?ble%1.]column_name -> relates to BASEDB/PRIMARY
+# --comparecol [schema1.][tablename1.]column_name --comparecol [schema1.][t?ble%1.]column_name -> relates to BASEDB/PRIMARY
 sub MarkCmpColumns {
 	my $table_list = shift;
 	my $cmp_list = shift;
@@ -1283,7 +1285,7 @@ sub PrepareArgs {
 			push @args, '--keyonly';
 			$info .= "\nUsing pk/uk";
 		} else {
-			push @args, '--compare', $TABLE_CMP_COLUMNS{$table_name};
+			push @args, '--comparecol', $TABLE_CMP_COLUMNS{$table_name};
 			$info .= "\nUsing column ".$TABLE_CMP_COLUMNS{$table_name};
 		}
 	} else {
@@ -1306,6 +1308,38 @@ sub PrepareArgs {
 	return @args;
 }
 
+sub SetProcessName {
+	my @args = @_;
+        my $new_name = (caller)[1];
+	
+	if (defined($CHILDREN{'child'})) {
+		$new_name = '[WORKER] '.$new_name;
+	}
+
+        while (my $a = shift @args) {
+                if ($a eq '--db' || $a eq '-d' || $a eq '--basedb' || $a eq '--primary') {
+                        my $b = shift @args; #skip
+			if (!defined($CHILDREN{'child'}) && $b =~ /(?:([\w\d]+)=)?([\w\d]+)(?:\/([\w\d]+))?\@([\w\d\.\-]+)(?::(\d+))?\/([\w\d]+)/) {
+                           #alias, user, pass, host, port, service
+			   	$new_name .= " $a ";
+			   	$new_name .= "$1=" if (defined($1));
+			   	$new_name .= "$2@" if (defined($2));
+				$new_name .= "$4";
+				$new_name .= ":$5" if (defined($5));
+				$new_name .= "/$6";
+			}
+
+                } elsif ($a eq '--auxuser') {
+                        $a = shift @args;
+                        $a =~ s/(\S+?)\/?/$1/;
+                        $new_name .= ' --auxuser '.$a;
+                } else {
+                        $new_name .= " $a";
+                }
+        }
+        $0 = $new_name;
+}
+
 sub SpawnNewProcess {
 	my ($args_ref, $table_name, $processed_tables_ref, $selector) = @_;
 
@@ -1320,6 +1354,8 @@ sub SpawnNewProcess {
 	#### this is child
 	if ($pid == 0) { #we are child
 		%CHILDREN = ('child' => 1); #clear CHILDREN hash, we are child
+		SetProcessName(@{$args_ref}); #change process name, it will contain info on processing state
+
 		$SIG{INT} = \&SigTerm;
 		$SIG{TERM} = \&SigTerm;
 		$SIG{CHLD} = \&SigTerm; #= "IGNORE"; ?? if ignored: (TODO)
@@ -1536,6 +1572,7 @@ $| = 1; #no buffering on stdout
 $SIG{INT} = \&Terminate;
 $SIG{TERM} = \&Terminate;
 
+SetProcessName(@ARGV);
 GetParams();
 
 if (VerifyTime(@TIME_RANGES) == 0) {
@@ -1576,7 +1613,7 @@ ProcessAllTables($list, $report, \%DATABASES);
 # --range "Mo-We 20:00-6:00"
 # --schema schema[.tablename] #if %/? then like 
 # --exclude [db2=]schema[.tablename][.column] #if %/? then like %/_ LIKE '%A\_B%' ESCAPE '\'; ; column without wildcards
-# --compare [schema.][tablename.]column --compare [schema2.][tablename2.]column2
+# --comparecol [schema.][tablename.]column --comparecol [schema2.][tablename2.]column2
 # --comparekey [schema1.]t?ble%1 -> relates to BASEDB/PRIMARY
 # --remap [db2=]schema1[.tablename1][.part1]:schema2[.tablename2][.part2] <- without multiple partition mapping
 
@@ -1592,7 +1629,7 @@ __END__
 
 =head1 SYNOPSIS
 
-DbCompare.pl --db [dbalias=]user[/pass]@host1[:port]/service --db [dbalias2=]user[/pass]@host2[:port]/service --schema schema [--compare [schema.][table.]column] [--comparekey [schema.]table] [--parallel NUMBER] [--statefile file.state] [--logfile log.txt] [--pidfile file.pid] [--maxload NUMBER] [--remap dbalias=schema1[.table1]:schema2[.table2]] [--range "TIME SPECIFICATION"] [--exclude schema[.table]] [--auxuser user[/pass]] [--test] [-v] [--help|-h]
+DbCompare.pl --db [dbalias=]user[/pass]@host1[:port]/service --db [dbalias2=]user[/pass]@host2[:port]/service --schema schema [--comparecol [schema.][table.]column] [--comparekey [schema.]table] [--parallel NUMBER] [--statefile file.state] [--logfile log.txt] [--pidfile file.pid] [--maxload NUMBER] [--remap dbalias=schema1[.table1]:schema2[.table2]] [--range "TIME SPECIFICATION"] [--exclude schema[.table]] [--auxuser user[/pass]] [--test] [-v] [--help|-h]
 
 =head1 DESCRIPTION
 
@@ -1622,7 +1659,7 @@ Skips table or all tables in given schema during table list generation. You can 
 
 In case SHA1 is used for data comparison, you can choose which column to skip during hash calculation for specified table. You can use %, * or ? as wildcards only in schema or table names. You can use multiple --exclude options. 
 
-=item -c, --compare [schema.][tablename.]column 
+=item -c, --comparecol, --comparecolumn [schema.][tablename.]column 
 
 Compares rows by given column. It should be timestamp column and it should be updated each time a DML modifies the row. It is much faster than comparing whole row using SHA1 hash. If only column is given, then all tables in all schemas will be compared using this column. If column with table name is given then the column will be used only for spectified table in all schemas provided in --schema parameter. You can use %, * or ? as wildcards. You can use multiple --compare options.
 

@@ -1,12 +1,11 @@
 DataCompare:
 	- review if NLV is needed with DBMS_CRYPTO.Hash call and check if orahash is faster. Check STANDARD_HASH
 	avg(length(standard_hash(column))) is 4.5x faster than dbms_crypto.hash(utl_raw.cast_to_raw(column),3) if column is varchar2(8 char)
+
+
 	
 
 DbCompare: 
-	- change $0 to scriptname, current table and comparing parameters
-
-	- change parameter name `compare` to `comparecolumn`
 
 	- add pseudo partitioning. Big tables should be compared in fragments/ranges in PK, taken from stats? group by on i_FFS?
 		select * from (
@@ -24,9 +23,9 @@ DbCompare:
 
 	- if DataCompare returns error like too many out of sync records it should skip this table and continue with next one
 
-	- it there is no PK nor UK on table it could be skipped, can this be changed to all columns like in GG replication?
+	- if there is no PK nor UK on table it could be skipped, can this be changed to all columns like in GG replication?
 
-	- add posibility to choose dedicated mode for connection
+	- add posibility to choose dedicated/shared mode for connection
 
 	- remap partitions? partitions --remap [db2=][schema1.][tablename1]{PART1}:[schema2.][tablename2]{PART1,PART2}
 

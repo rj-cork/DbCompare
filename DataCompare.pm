@@ -1,7 +1,7 @@
 package DataCompare;
 
 # DataCompare package - functions for comparing data in multiple tables/table partitions
-# Version 1.20
+# Version 1.21
 # (C) 2016 - Radoslaw Karas <rj.cork@gmail.com>
 # 
 # This program is free software; you can redistribute it and/or modify
@@ -176,7 +176,7 @@ sub GetParams {
 
 	GetOptions ('db|d=s' => \@DBS,
 		    'table|t=s' => \$TABLENAME,
-		    'compare|c=s' => \$CMP_COLUMN,
+		    'comparecolumn|comparecol|c=s' => \$CMP_COLUMN,
 		    'keyonly'=> \$CMP_KEY_ONLY,
 		    'excludecolumn|excludecol=s' => \@exclude_cols,
 	            'verbose|v+' => \$DEBUG,
@@ -288,7 +288,7 @@ sub GetParams {
 	$TABLENAME = uc($TABLENAME);
 
 	if (defined($CMP_COLUMN) && $CMP_KEY_ONLY > 0) {
-		PrintMsg "ERROR: Parameters --compare and --keyonly are mutual exclusive.\n";
+		PrintMsg "ERROR: Parameters --comparecol and --keyonly are mutual exclusive.\n";
                 exit 1;
 	}
 }
@@ -321,7 +321,8 @@ sub ConnectToDatabase {
                 $d->{'PORT'} = 1521;
         }
 
-	PrintMsg( $d->{'NAME'},": dbi:Oracle://$d->{HOST}:$d->{PORT}/$d->{SERVICE} user: $d->{USER}\n") if ($DEBUG>0);
+	PrintMsg( $d->{'NAME'},": dbi:Oracle://$d->{HOST}:$d->{PORT}/$d->{SERVICE} user: $d->{USER}\n");# if ($DEBUG>0);
+
         $dbh = DBI->connect('dbi:Oracle://'.$d->{'HOST'}.':'.$d->{'PORT'}.'/'.$d->{'SERVICE'},
                             $d->{'USER'},
                             $d->{'PASS'});

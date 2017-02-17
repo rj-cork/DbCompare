@@ -2,9 +2,14 @@ Revision history for DbCompare and DataCompare scripts
 
 DbCompare.pl
 
+	1.10
+		- fix: multiple --table/--schema doesn't stack - GetAllTables()
+		- change $0 to scriptname, current table and comparing parameters
+		- change parameter name `compare` to `comparecolumn`
+
 	1.09 	
-		- parent process when dying didn't kill all child processes
-		- fix race condition in ProcessAllTables between removing terminated child and select that returned some leftovers
+		- parent process didn't kill all child processes when dying
+		- fix race condition in ProcessAllTables between removing terminated child and select function that returned some leftovers
 
 	1.08 	
 		- adaptive parallelisation added, up to 3 parallel processes with no more than 1 that is preparing/executing query 
@@ -33,6 +38,9 @@ DbCompare.pl
 
 
 DataCompare.pm 
+
+	1.21
+		- db connection strings will be always printed not only in debug mode
 
 	1.20
 		- PrintMsg printing to STDERR didn't flush properly when duplicated with end of a pipe
