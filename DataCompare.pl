@@ -39,7 +39,7 @@ __END__
 
 =head1 SYNOPSIS
 
-DataCompare.pl --db user[/pass]@host1[:port]/service --db user[/pass]@host2[:port]/service --table schema.table [--compare LAST_UPDT_TM] [--keyonly] [--parallel NUMBER] [-v] [--logfile /file/to/log.txt] [--rounds NUMBER] [--sleep NUMBER] [--map dbalias=newtablename] [--partition NAME] [--partitionfor STATEMENT] [--help|-h]
+DataCompare.pl --db user[/pass]@host1[:port]/service --db user[/pass]@host2[:port]/service --table schema.table [--comparecolumn COLUMN] [--keyonly] [--parallel NUMBER] [-v] [--logfile /file/to/log.txt] [--rounds NUMBER] [--sleep NUMBER] [--map dbalias=newtablename] [--partition NAME] [--partitionfor STATEMENT] [--help|-h]
 
 =head1 DESCRIPTION
 
@@ -61,7 +61,7 @@ Compares rows in given table. Can be provided with schema or without.
 
 For given connection referred by dbalias set different schema name and different table name. You can use multiple --map options.
 
-=item -c, --compare COLUMN
+=item -c, --comparecol, --comparecolumn COLUMN
 
 Compares rows by given column. It should be timestamp column and it should be updated each time a DML modifies the row. It is much faster than comparing whole row.
 
@@ -121,7 +121,7 @@ Displays this message.
 
 =head1 EXAMPLES
 
-DataCompare.pl --db db1=system/pass@rac1-scan/testdb1 --db db2=system/pass@rac2-scan/testdb2  --table=data_owner.table --compare=COLUMN_UPDT_TM --map db2=data_owner.table --partition=P_0001 --mappartition db2=P_0001,P_0032
+DataCompare.pl --db db1=system/pass@rac1-scan/testdb1 --db db2=system/pass@rac2-scan/testdb2  --table=data_owner.table --comparecol=COLUMN_UPDT_TM --map db2=data_owner.table --partition=P_0001 --mappartition db2=P_0001,P_0032
 
 DataCompare.pl --db system@rac1-scan/testdb1 --db system@rac2-scan/testdb2  --table=data_owner.othertable --partition=P_0005 
 
