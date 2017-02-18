@@ -186,6 +186,7 @@ sub GetParams {
 		    'map|m=s' => \%maps,
 		    'mappartition=s' => \%mapparts,
 		    'partition=s' => \$part,
+		    'limiter=s' => \$LIMITER,
 		    'partitionfor=s' => \$partfor,
 		    'checktype!' => \$CHECK_COL_TYPE,
 		    'checknullable!' => \$CHECK_COL_NULLABLE,
@@ -457,7 +458,7 @@ sub GetPrimaryKey {
 			}	
 		}
 		PrintMsg ("GetPrimaryKey($wname): All columns are included in PK/U constraint. Switching to keyonly comparison mode.\n");
-		$LIMITER = '1=1';
+		#$LIMITER = '1=1';
 		$CMP_KEY_ONLY = 1;
 	}	
 
@@ -835,7 +836,7 @@ sub SecondStagePrepSql {
 	my $sql;
 	my @PK_COLUMNS = sort { $COLUMNS{$a}->{CPOSITON} <=> $COLUMNS{$b}->{CPOSITON} } grep {defined $COLUMNS{$_}->{CPOSITON}} keys %COLUMNS;
 
-	if (defined($CMP_COLUMN)) {
+	if (defined($CMP_COLUMN)) { #TODO: is limiter needed? access is by pk
 		$sql = 'SELECT '.$CMP_COLUMN." FROM $tablename WHERE ".join(" and ", map { "$_=?" } @PK_COLUMNS ).' AND '.$LIMITER;
 	} elsif ($CMP_KEY_ONLY) {
 		$sql = "SELECT 'exists' FROM $tablename WHERE ".join(" and ", map { "$_=?" } @PK_COLUMNS ).' AND '.$LIMITER;
@@ -1045,12 +1046,12 @@ sub DataCompare {
 	$RUNNING = 0;
 	$COLSFILLED = 0;
 
-	if (defined($CMP_COLUMN) or $CMP_KEY_ONLY) {
+#	if (defined($CMP_COLUMN) or $CMP_KEY_ONLY) {
 		#$LIMITER = ' '.$CMP_COLUMN." < TO_TIMESTAMP('";
 		#$LIMITER .= POSIX::strftime('%y/%m/%d %H:%M:%S', localtime(time-$SHIFT));
 		#$LIMITER .= "','yy/mm/dd hh24:mi:ss')";
-		$LIMITER = '1=1'; #we dont need limiter - lets set something that is true
-	}
+	$LIMITER = '1=1' if (not defined($LIMITER)); #we dont need limiter - lets set something that is true
+#	}
 
 	PrintMsg("START ", POSIX::strftime('%y/%m/%d %H:%M:%S', localtime),"\n");
 
