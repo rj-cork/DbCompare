@@ -1,0 +1,13 @@
+- proste uruchomienie
+  defaults
+  1) pierwsza baza to primary
+  2) porownanie po kluczach glownych/uniq
+  3) sprawdzanie po partycjach jesli sa
+	- jesli partycja/tabelka jest za duza uzyj sample
+	select count(*) from data_owner.table1 [partition (P_0001)] sample (0.001);
+  4) parallelizm 1 
+  5) sqlparallelizm 1
+
+- output do 1 pliku, diffy do katalogu w formacie 
+
+- mozliwosc 
