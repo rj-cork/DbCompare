@@ -7,7 +7,36 @@
 	select count(*) from data_owner.table1 [partition (P_0001)] sample (0.001);
   4) parallelizm 1 
   5) sqlparallelizm 1
+  6) no db load limit
+
 
 - output do 1 pliku, diffy do katalogu w formacie 
+	funkcje - loguj biezace (jeden plik)
+		- dump roznic	(katalog/wiele plikow)
+	
 
-- mozliwosc 
+- modulowe podejscie do liczenia sum
+
+
+- setup 
+	get params, 
+	set process name, 
+	verify time range,
+	create pid file, 
+	read state file
+
+- prepare table list
+	retrieve list from databases (tables,partitions,subpatrtitions,stats)
+	for each subpart/part/table bigger than x select pk from table [partition (...)] sample (...); -> chunks
+	remap table/schema/partition/subpart? names
+	remove excluded tables
+	set comparision type (column/sha1/pk) for each table
+
+- compare tables
+	for each table/partition/subpart/chunk
+		fork comparing process
+		print comparing results  
+		verify time range
+		varify database load
+
+- comparing process
