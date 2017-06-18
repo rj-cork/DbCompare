@@ -45,13 +45,31 @@
 - comparing process DataComparisonWorker.pm
 	CoordinatorProcess - forks as a separate process to keep main process away from threads  
 		gets hash
-			{ dbname => { connection => { user=>user1, pass=>pass1, host=>dbhost1, port=>dbport1, service=>dbservice },
+			{ datasources => { dbname => { connection => { user=>user1, pass=>pass1, host=>dbhost1, port=>dbport1, service=>dbservice },
 					schema => user1,
 					table => table1,
 					partition_name => part1,
 					partition_for => '....',
-					subpartition_name => '....',
-					pk_range => '
+					subpartition_name => '....', ??? chyba bez subpartycji, pk_range to zrobi a subpartycji interwalowych nie ma wiec
+									pk_range powinien byc bezpieczny
+					pk_range => '...',
+					pk_range_no => ...,
+					},
+					dbname2=> {
+
+					}
+			  settings => {
+					compare_col => ....,
+					compare_row => sha1
+					pk_transformation => 'sub { .... } returns' ??? (w DIFFS dla kazdego klucza zmodyfikowanego powinien byc zapisany w %PK_ORIGINALS oryginalne wartosci dla porownywarki w stage 2
+					select_concurency => 1
+					stage2_rounds => 5,
+					stage2_sleep => 30,
+					exclude_cols => [col2,col3],
+					dont_check_type => true,
+					dont_check_nullable => true
+			 }
+		}
 	Worker - 1 thread per database
 
 - output module Logger.pm
