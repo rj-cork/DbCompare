@@ -42,9 +42,19 @@
 		verify time range
 		varify database load
 
-- comparing process
+- comparing process DataComparisonWorker.pm
+	CoordinatorProcess - forks as a separate process to keep main process away from threads  
+		gets hash
+			{ dbname => { connection => { user=>user1, pass=>pass1, host=>dbhost1, port=>dbport1, service=>dbservice },
+					schema => user1,
+					table => table1,
+					partition_name => part1,
+					partition_for => '....',
+					subpartition_name => '....',
+					pk_range => '
+	Worker - 1 thread per database
 
-- output module
+- output module Logger.pm
 	- gets result for a table and prints output
 	- function for printing regular error messages
 
