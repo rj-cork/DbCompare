@@ -44,16 +44,17 @@
 
 - comparing process DataComparisonWorker.pm
 	CoordinatorProcess - forks as a separate process to keep main process away from threads  
+		write pipe,
 		gets hash
 			{ datasources => { dbname => { connection => { user=>user1, pass=>pass1, host=>dbhost1, port=>dbport1, service=>dbservice },
 					schema => user1,
 					table => table1,
 					partition_name => part1,
 					partition_for => '....',
-					subpartition_name => '....', ??? chyba bez subpartycji, pk_range to zrobi a subpartycji interwalowych nie ma wiec
-									pk_range powinien byc bezpieczny
+					#subpartition_name => '....', ??? chyba bez subpartycji, pk_range to zrobi a subpartycji interwalowych nie ma wiec
+					#				pk_range powinien byc bezpieczny
 					pk_range => '...',
-					pk_range_no => ...,
+					chunk_name => ..., #skrocona wersja partition for/partition name albo/skrocona wersja pk_range - sluzy do wyswietlania
 					},
 					dbname2=> {
 

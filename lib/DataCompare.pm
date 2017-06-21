@@ -1084,6 +1084,63 @@ sub DataCompare {
 
 	exit 0;
 }
+# ---------------------------------------------------------------------------------------------------------------
+
+sub SetProcessName {
+	my $args_ref = shift;
+
+	my $primary_db_name = $args_ref->{settings}->{primary};
+	my $new_name = $args_ref->{datasources}->
+	 $new_name .= " $a ";
+                                $new_name .= "$1=" if (defined($1));
+                                $new_name .= "$2@" if (defined($2));
+                                $new_name .= "$4";
+                                $new_name .= ":$5" if (defined($5));
+                                $new_name .= "/$6";
+
+}
+
+sub CoordinatorProcess { #we are forked process that is supposed to compare given table or partition
+	$out_pipe = shift; #this pipe is for sending output data to main process
+	$args_ref = shift; #this is reference to hash
+		# { datasources => { dbname => { connection => { user=>user1, pass=>pass1, host=>dbhost1, port=>dbport1, service=>dbservice },
+                #              	   	         object => { schema => user, table => tab1, partition_name => part1, partition_for => '..', pk_range => '..'},
+		#				 name => 'user.tab1.part', #skrocona wersja partition for/partition name albo/skrocona wersja pk_range - sluzy do wyswietlania
+		#				},
+		#			dbname2 => {
+		#				}
+		#		 	}
+		#		}
+						#subpartition_name => '....', ??? chyba bez subpartycji, pk_range to zrobi a subpartycji interwalowych nie ma wiec
+                                        #                               pk_range powinien byc bezpieczny
+                #	settings => {
+		#			primary => ..., which database is primary
+                       #                 compare_col => ....,
+                        #                compare_row => sha1
+                         #               pk_transformation => 'sub { .... } returns' ??? (w DIFFS dla kazdego klucza zmodyfikowanego powinien byc zapisany w %PK_ORIGINALS oryginalne wartosci dla porownywarki w stage 2
+                          #              select_concurency => 1
+                           #             stage2_rounds => 5,
+                           #             stage2_sleep => 30,
+                           #             exclude_cols => [col2,col3],
+                           #             dont_check_type => true,
+                           #             dont_check_nullable => true
+                        # }
+
+
+
+        SetProcessName($args_ref); #change process name, it will contain info on processing state
+
+#        $SIG{INT} = \&SigTerm;
+ #       $SIG{TERM} = \&SigTerm;
+  #      $SIG{CHLD} = \&SigTerm; #= "IGNORE"; ?? if ignored: (TODO)
+   #     $SIG{ALRM} = \&SigTerm;
+
+        SpawnWorkers(); #proceed with table comparision
+	exit 0;
+} 
+
+
+}
 
 1;
 #DataCompare();

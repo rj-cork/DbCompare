@@ -43,6 +43,7 @@ use constant DEBUGTRACE => 512;#Carp::longmess
 
 $|=1;
 my $LOG_FILE;# :shared;
+my $OUTPUT; #pipe or STDOUT
 my $RESULTS_DIR;
 my $DEBUG_LEVEL = 0;
 my $RESULT_FILE_FD;
@@ -58,6 +59,7 @@ sub SetupLogger {
 	$LOG_FILE = $params->{'LOG_FILE'} if (defined($params->{'LOG_FILE'}));
 	$RESULTS_DIR = $params->{'RESULTS_DIR'} if (defined($params->{'RESULTS_DIR'}));
 	$DEBUG_LEVEL = $params->{'DEBUG_LEVEL'} if (defined($params->{'DEBUG_LEVEL'}));
+	$RESULT_FILE_FD = $params->{'RESULT_FILE_FD'} if (defined($params->{'RESULT_FILE_FD'}));
 
 	if ( defined($LOG_FILE) && -e $LOG_FILE && ( ! -f $LOG_FILE || -w $LOG_FILE ) ) {
 		Terminate "File $LOG_FILE is not a regular or writeable file.";
@@ -120,6 +122,7 @@ sub PrintMsg {
 		if ( ! -e $LOG_FILE || ( -f $LOG_FILE && -w $LOG_FILE ) ) {
 
 			lock($LOG_FILE);
+			#TODO: flock($LOG_FILE);
 			my $f;
 
 			open $f,">>$LOG_FILE";
@@ -132,8 +135,15 @@ sub PrintMsg {
 	        }
 	}
 
-	print STDERR $h, @_;
-	STDERR->flush(); #force flushing - it may be end of a pipe
+	if (defined($RESULT_FILE_FD)) { #TODO: pomysl jest zeby byl jakis counter z numerem lini na poczatku kazdej, zeby proces odbierajacy z pipea wiedzial
+					# ze wszystko jest ok
+		print $RESULT_FILE_FD $h, @_;
+		$RESULT_FILE_FD->flush();
+	} else {
+		print STDERR $h, @_;
+		STDERR->flush(); #force flushing - it may be end of a pipe
+	}
+
 }
 
 
