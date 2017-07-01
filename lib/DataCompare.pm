@@ -109,7 +109,7 @@ my $SHIFT=10*60; #used if CMP_COLUMN defined - how much seconds back from now we
 		# 10 minutes should be enough for data to be replicated from SRC to DST so (almost)a
 		# all records with timestamp<systimestamp-$SHIFT should be in sync
 my $SECONDSTAGESLEEP = 30; #wait 30 seconds between each 2nd stage lookup pass
-my $ROUNDS = 5; #how many 2nd stage lookup passes
+my $SECONDSTAGETRIES = 5; #how many 2nd stage lookup passes
 my %EXCLUDE_COLUMNS; #columns that should be skipped, kept in hash for easy look up. 
 my $CHECK_COL_TYPE = 1;
 my $CHECK_COL_NULLABLE = 1;
@@ -1085,26 +1085,284 @@ sub DataCompare {
 	exit 0;
 }
 # ---------------------------------------------------------------------------------------------------------------
+my $SECONDSTAGESLEEP = 30; #wait 30 seconds between each 2nd stage lookup pass
+my $SECONDSTAGETRIES = 5; #how many 2nd stage lookup passes
+my $FIRST_STAGE_RUNNING :shared;
+
+use constant PROCESS_NAME = 'DataCompare';
 
 sub SetProcessName {
 	my $args_ref = shift;
 
 	my $primary_db_name = $args_ref->{settings}->{primary};
-	my $new_name = $args_ref->{datasources}->
-	 $new_name .= " $a ";
-                                $new_name .= "$1=" if (defined($1));
-                                $new_name .= "$2@" if (defined($2));
-                                $new_name .= "$4";
-                                $new_name .= ":$5" if (defined($5));
-                                $new_name .= "/$6";
+	my $new_name = PROCESS_NAME;
 
+	my $ds = $args_ref->{datasources}->{$primary_db_name};
+	Logger::Terminate() if (!defined($ds));
+
+	$new_name .= " $primary_db_name="; 
+	$new_name .= $ds->{connection}->{user}.'@';
+	$new_name .= $ds->{connection}->{host}.'/';
+	$new_name .= $ds->{connection}->{service}.':';
+	$new_name .= $ds->{name};
+
+	foreach my $dbname (sort keys %{$args_ref->{datasources}}) {
+		next if ($dbname eq $primary_db_name);
+
+		$ds = $args_ref->{datasources}->{$dbname};
+		$new_name .= " $dbname=";
+	        $new_name .= $ds->{connection}->{user}.'@';
+	        $new_name .= $ds->{connection}->{host}.'/';
+	        $new_name .= $ds->{connection}->{service}.':';
+	        $new_name .= $ds->{name};
+	}
+
+	$0 = $new_name;
+}
+
+sub FirstStageWorker {
+	my $data_source = shift;
+	my $global_settings = shift;
+
+	my $dbh;
+	my $thisdb = $DATABASES{$worker_name};
+	my $tablename = ResolveMapping($TABLENAME, $worker_name);
+
+	my $msg = "FirstStageWorker[$worker_name] start - table: $tablename, ";
+	if ($PARTMAPPINGS{$worker_name}) {
+		$msg .= "partition mapped to: ".join(', ',@{$PARTMAPPINGS{$worker_name}}).", ";
+	} else {
+		$msg .= "partition: $PARTITION, " if ($PARTITION);
+	}
+
+	if ($CMP_COLUMN) {
+		PrintMsg ("$msg compare using column $CMP_COLUMN \n");
+	} elsif ($CMP_KEY_ONLY) {
+		PrintMsg ("$msg compare using PK/UK columns only \n");
+	} else {
+		PrintMsg ("$msg compare using SHA1 on all columns\n");
+	}
+
+	{
+		lock($RUNNING);
+		$RUNNING++;
+	}
+	
+	$dbh = ConnectToDatabase($thisdb);
+	if (not defined($dbh)) {
+		lock($RUNNING);
+		$RUNNING=-102;
+		return -1;
+	}
+	SessionSetup($dbh, $thisdb);
+
+	{
+		lock(%COLUMNS);
+		if (GetColumns($dbh, $tablename, $worker_name)<0) {
+			lock($RUNNING);
+			$RUNNING=-103;
+			return -1;
+		}
+		if (GetPrimaryKey($dbh, $tablename, $worker_name)<0) { #error
+			lock($RUNNING);
+			$RUNNING=-104;
+			return -1;
+		}
+	}
+
+	my @PK_COLUMNS = sort { $COLUMNS{$a}->{CPOSITON} <=> $COLUMNS{$b}->{CPOSITON} } grep {defined $COLUMNS{$_}->{CPOSITON}} keys %COLUMNS;
+
+	PrintMsg( "FirstStageWorker[$worker_name] PrimaryKey/Unique: ", join(',',@PK_COLUMNS),"\n");
+
+	my $sql;
+	my $orderby = ' ORDER BY '.join(',',@PK_COLUMNS);
+
+	if (defined($PARTMAPPINGS{$worker_name}) && scalar(@{$PARTMAPPINGS{$worker_name}}) > 0 && $PARTITION) {
+		my $hook = '';
+		foreach my $partmap (@{$PARTMAPPINGS{$worker_name}}) {
+			$partmap = " PARTITION ($partmap) ";
+			if (defined($CMP_COLUMN)) {
+				$sql .= $hook.'SELECT '.join(',',@PK_COLUMNS).','.$CMP_COLUMN.' CMP#VALUE FROM '.$tablename.$partmap.' WHERE '.$LIMITER;
+			} elsif ($CMP_KEY_ONLY) {
+				$sql .= $hook.'SELECT '.join(',',@PK_COLUMNS).", 'exists' CMP#VALUE FROM ".$tablename.$PARTITION.' WHERE '.$LIMITER;
+			} else {
+				$sql .= $hook.SHA1Sql(@PK_COLUMNS).$tablename.$partmap;
+			}
+			$hook = "\n UNION ALL \n";
+		}
+		$sql .= $orderby;
+	} else {
+		if (defined($CMP_COLUMN)) {
+			$sql = 'SELECT '.join(',',@PK_COLUMNS).','.$CMP_COLUMN.' CMP#VALUE FROM '.$tablename.$PARTITION.' WHERE '.$LIMITER.$orderby;
+		} elsif ($CMP_KEY_ONLY) {
+			$sql = 'SELECT '.join(',',@PK_COLUMNS).", 'exists' CMP#VALUE FROM ".$tablename.$PARTITION.' WHERE '.$LIMITER.$orderby;
+		} else {
+			$sql = SHA1Sql(@PK_COLUMNS).$tablename.$PARTITION.$orderby;
+		}
+	}
+
+	PrintMsg( "[$worker_name] $sql\n") if ($DEBUG>0);
+
+	my $prep = $dbh->prepare($sql);
+	if(!defined($prep) or $dbh->err) { 
+		$RUNNING = -106;
+		PrintMsg( "[$worker_name] ERROR: $DBI::errstr for [$sql]\n");
+		return -1;
+	}
+
+	$prep->execute();
+	if(!defined($prep) or $dbh->err) { 
+		$RUNNING = -107;
+		PrintMsg( "[$worker_name] ERROR: $DBI::errstr for [$sql]\n");
+		return -1;
+	}
+
+	my $i=0;
+	my ($val,$key);
+	while (my $aref = $prep->fetchall_arrayref(undef, $MAX_ROWS)) {
+
+		my $s=2;
+		{
+			lock(%PROGRESS);
+
+			my $p = $PROGRESS{$worker_name};
+			foreach my $k (keys %PROGRESS) { #$p is the smallest progress for all workers
+				$p = $PROGRESS{$k} if ($PROGRESS{$k}<$p);
+			}
+
+			#if the smallest progress is >0 then all are downloading data now and sql execution phase has ended across all databases
+			if ($p > 0) {
+				PrintMsg( "FirstStageWorker: sql execution finished across all workers.\n") if ($print_exec_finished);
+				$print_exec_finished = 0;
+			}
+
+			#$s is the difference between this worker and the slowest one
+			$s=$PROGRESS{$worker_name}-$p;
+
+			until($s < 20) { #the difference cannot be bigger than 112 - around 500MB RAM per database connection for MAX_ROWS=10000
+				PrintMsg( "[$worker_name] batch no. $PROGRESS{$worker_name} is $s ahead others, waiting\n") if ($DEBUG>0);
+				#find worker with the smallest progress different than this one
+				$p = $PROGRESS{$worker_name};
+				foreach my $k (keys %PROGRESS) {
+					$p = $PROGRESS{$k} if ($PROGRESS{$k}<$p);
+				}
+				#$s is the difference between this worker and the slowest one
+				$s = $PROGRESS{$worker_name}-$p;
+				cond_wait(%PROGRESS); #release lock on %PROGRESS and wait until some other worker do some work
+			}
+		}	
+		{
+			lock(%PROGRESS);
+			$PROGRESS{$worker_name}++;
+			cond_broadcast(%PROGRESS);
+		}
+				
+
+		lock(%DIFFS);
+
+		my $in_sync_counter=0;
+		my $out_of_sync_counter=0;
+		my $thisdb_only_counter=0;
+
+		my @dbs4comparison = grep {$_ ne $worker_name} keys %DIFFS; #list of databases/workers != this one
+		while (my $rref = shift(@{$aref})) {
+
+
+			PrintMsg( "[$worker_name] $i ",join('|',@{$rref}),"\n") if ($DEBUG>4);
+			$val = pop @{$rref}; #last column in row is value
+			$key = join('|',@{$rref}); #first columns (except the last one) are key
+
+			PrintMsg( "[$worker_name] $i key: [$key] value: $val\n") if ($DEBUG>4);
+
+			my $thesame = 1;
+			my $match = 1;
+			foreach my $k (@dbs4comparison) {
+				if ( defined($DIFFS{$k}->{$key}) ) { #there is matching key stored in some other DB
+					if ($DIFFS{$k}->{$key} ne $val) { #key exists but value differs
+						$match = 0;
+						$out_of_sync_counter++;
+						last;
+					}
+				} else {
+					$match = 0;
+					$thisdb_only_counter++;
+					last;
+				}
+			}
+			if ($match) { #there are the same rows in other databases
+				#value stored in DIFFS{other_database} is the same as in fetched row in this database/worker
+				#records are the same - we can remove it from all hashes and increase the counter
+				foreach my $k (@dbs4comparison) {
+					delete ($DIFFS{$k}->{$key});
+				}
+				$in_sync_counter++;
+			} else { #there are some differences for this record (missing or different value)
+				#lets add it to DIFFS hash for this worker -> its final for this pass it shouldnt be changed as $key is PK
+				#it may be deleted by other workers if they find that their records are the same
+				$DIFFS{$worker_name}->{$key} = $val;
+			}
+			$i++;
+			PrintMsg( "[$worker_name] $i \n") if ($i % 1000000 == 0);
+		}
+
+		#check how many out of sync records is at the moment
+		my $max_oos = 0;
+		foreach my $d (keys %DIFFS) {
+			my $j = scalar(keys %{$DIFFS{$d}});
+			$max_oos = $j if ($j > $max_oos);
+		}
+
+		$OUTOFSYNCCOUNTER = $max_oos;
+		PrintMsg( "[$worker_name] rows processed: $i; in sync: $in_sync_counter, ",
+			  "out of: $out_of_sync_counter, missing in other db: $thisdb_only_counter, ",
+			  "summary out of sync: $OUTOFSYNCCOUNTER \n")  if ($DEBUG>1);
+	}
+
+	$prep->finish;
+	$dbh->disconnect();
+
+	#limit so the script will not whole memory if tables are totally different
+	if($OUTOFSYNCCOUNTER > $MAX_DIFFS) { 
+		$RUNNING = -108;
+		PrintMsg( "[$worker_name] ERROR: too many out of sync records. Max limit is $MAX_DIFFS.\n");
+		return -1;
+	}
+
+	PrintMsg( "FirstStageWorker[$worker_name] finished, total rows checked: $i\n");
+	{
+		lock($RUNNING);
+		$RUNNING--;
+	}
+}
+
+sub RunFirstStageWorkers {
+	my $args_ref = shift;
+	my @WORKERS;
+
+	my $i = 0;
+	foreach my $w (sort keys %{$args_ref->{datasources}}) {
+		$args_ref->{$w}->{dbname} = $w;
+		$WORKERS[$i] = threads->create(\&FirstStageWorker, $args_ref->{$w}, $args_ref->{settings});
+		$WORKERS[$i]->detach();
+		$i++;
+	}
+
+	sleep 1;
+	while($FIRST_STAGE_RUNNING > 0) { #wait for all workers to finish 1st pass
+		sleep 1;
+	}
+
+	Logger::Terminate("FIRST_STAGE_RUNNING: $FIRST_STAGE_RUNNING" if ($FIRST_STAGE_RUNNING < 0);
+			#RUNNING>0, workers are processing
+			#RUNNING==0, workers have finished
+			#RUNNING<0, error condition, exit immediately
 }
 
 sub CoordinatorProcess { #we are forked process that is supposed to compare given table or partition
-	$out_pipe = shift; #this pipe is for sending output data to main process
-	$args_ref = shift; #this is reference to hash
-		# { datasources => { dbname => { connection => { user=>user1, pass=>pass1, host=>dbhost1, port=>dbport1, service=>dbservice },
-                #              	   	         object => { schema => user, table => tab1, partition_name => part1, partition_for => '..', pk_range => '..'},
+	my $out_pipe = shift; #this pipe is for sending output data to main process
+	my $args_ref = shift; #this is reference to hash
+	# { datasources => { dbname => { connection => { user=>user1, pass=>pass1, host=>dbhost1, port=>dbport1, service=>dbservice },
+         #              	   	         object => { schema => user, table => tab1, partition_name => part1, partition_for => '..', pk_range => '..'},
 		#				 name => 'user.tab1.part', #skrocona wersja partition for/partition name albo/skrocona wersja pk_range - sluzy do wyswietlania
 		#				},
 		#			dbname2 => {
@@ -1126,21 +1384,33 @@ sub CoordinatorProcess { #we are forked process that is supposed to compare give
                            #             dont_check_nullable => true
                         # }
 
+	my $start_time = time;
 
+	Logger::SetupLogger( { RESULT_FILE_FD=>$out_pipe, RESULT_SEQUENCE=>1} );
 
-        SetProcessName($args_ref); #change process name, it will contain info on processing state
+	SetProcessName($args_ref); #change process name, it will contain info on processing state
 
-#        $SIG{INT} = \&SigTerm;
- #       $SIG{TERM} = \&SigTerm;
-  #      $SIG{CHLD} = \&SigTerm; #= "IGNORE"; ?? if ignored: (TODO)
-   #     $SIG{ALRM} = \&SigTerm;
+	Logger::PrintMsg(PROCESS_NAME," started at ", POSIX::strftime('%y/%m/%d %H:%M:%S', localtime));
 
-        SpawnWorkers(); #proceed with table comparision
+        RunFirstStageWorkers(); #proceed with table comparision, 1 thread per database connection
+
+	FirstStageFinalCheck();
+
+	for ($i=0;$i<$SECONDSTAGETRIES;$i++) {
+		sleep($SECONDSTAGESLEEP) if($i);
+		Logger::PrintMsg("SecondStage...");
+		last if (SecondStageLookup() == 0); #all is in sync, no need for more checking
+	}
+
+	FinalResults();	
+
+	PrintMsg(PROCESS_NAME, " stopped at ", POSIX::strftime('%y/%m/%d %H:%M:%S', localtime),
+			" time taken ", strftime("%T",gmtime(time-$start_time)));
+
 	exit 0;
 } 
 
 
-}
 
 1;
 #DataCompare();

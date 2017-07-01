@@ -47,6 +47,8 @@ my $OUTPUT; #pipe or STDOUT
 my $RESULTS_DIR;
 my $DEBUG_LEVEL = 0;
 my $RESULT_FILE_FD;
+my $RESULT_SEQUENCE = undef; #set to 1 to enable - shows sequence for each output line
+			# for checking correct msg flow from coordinator to main process
 
 #############################################################################
 
@@ -60,6 +62,7 @@ sub SetupLogger {
 	$RESULTS_DIR = $params->{'RESULTS_DIR'} if (defined($params->{'RESULTS_DIR'}));
 	$DEBUG_LEVEL = $params->{'DEBUG_LEVEL'} if (defined($params->{'DEBUG_LEVEL'}));
 	$RESULT_FILE_FD = $params->{'RESULT_FILE_FD'} if (defined($params->{'RESULT_FILE_FD'}));
+	$RESULT_SEQUENCE = 1 if (defined($params->{'RESULT_SEQUENCE'}));
 
 	if ( defined($LOG_FILE) && -e $LOG_FILE && ( ! -f $LOG_FILE || -w $LOG_FILE ) ) {
 		Terminate "File $LOG_FILE is not a regular or writeable file.";
@@ -126,7 +129,7 @@ sub PrintMsg {
 			my $f;
 
 			open $f,">>$LOG_FILE";
-			print $f $msg, @_;
+			print $f $msg, @_, "\n";
 			close $f;
 
 	        } else {
@@ -137,10 +140,11 @@ sub PrintMsg {
 
 	if (defined($RESULT_FILE_FD)) { #TODO: pomysl jest zeby byl jakis counter z numerem lini na poczatku kazdej, zeby proces odbierajacy z pipea wiedzial
 					# ze wszystko jest ok
-		print $RESULT_FILE_FD $h, @_;
+		print $RESULT_FILE_FD $h, "<$RESULT_SEQUENCE>", @_, "\n";
 		$RESULT_FILE_FD->flush();
+		$RESULT_SEQUENCE++;
 	} else {
-		print STDERR $h, @_;
+		print STDERR $h, @_, "\n";
 		STDERR->flush(); #force flushing - it may be end of a pipe
 	}
 
