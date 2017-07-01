@@ -1088,6 +1088,7 @@ sub DataCompare {
 my $SECONDSTAGESLEEP = 30; #wait 30 seconds between each 2nd stage lookup pass
 my $SECONDSTAGETRIES = 5; #how many 2nd stage lookup passes
 my $FIRST_STAGE_RUNNING :shared;
+my $BATCH_SIZE = 10000; #how many rows to process at once
 
 use constant PROCESS_NAME = 'DataCompare';
 
@@ -1120,42 +1121,96 @@ sub SetProcessName {
 	$0 = $new_name;
 }
 
+sub SessionSetup {
+	my $dbh = shift;
+
+	$dbh->{RaiseError} = 0; #dont die imediately
+        $dbh->{RowCacheSize} = $BATCH_SIZE; 
+
+	$dbh->do("ALTER SESSION SET NLS_DATE_FORMAT='YYYY-MM-DD HH24:MI:SS'");
+	$dbh->do("ALTER SESSION SET NLS_TIMESTAMP_FORMAT='YYYY-MM-DD HH24:MI:SS.FF'");
+#	uncomment to force buffered reads instead direct reads
+#	#$dbh->do('alter session set "_parallel_cluster_cache_policy" = CACHED');
+#	#$dbh->do('alter session set PARALLEL_FORCE_LOCAL = true');
+#	#$dbh->do('alter session set  "_serial_direct_read" = never');
+#	#$dbh->do('alter session set "_very_large_object_threshold" = 1000000000');
+#	my $r = $dbh->selectrow_hashref("select SYS_CONTEXT ('USERENV','INSTANCE_NAME') INST, SYS_CONTEXT ('USERENV','DB_NAME') DB from dual");
+	
+#	$db->{'INSTANCE_NAME'}=$r->{'INST'};
+#	$db->{'DB_NAME'}=$r->{'DB'};
+}
+
+sub ConnectToDatabase {
+	my $worker_name = shift;
+	my $d = shift;
+        my $dbh;
+
+	if (not defined($d->{'pass'})) {
+		Logger::PrintMsg(Logger::ERROR, "$worker_name: no password given\n");
+		return undef;
+	}
+
+	if (not defined($d->{'port'})) {
+                $d->{'port'} = 1521;
+        }
+
+	Logger::PrintMsg(Logger::DEBUG, "$worker_name: dbi:Oracle://$d->{host}:$d->{port}/$d->{service} user: $d->{user}\n");
+#  $dbh = DBI->connect('dbi:Oracle:host=foobar;sid=ORCL;port=1521;SERVER=POOLED', 'scott/tiger', '')
+        $dbh = DBI->connect('dbi:Oracle://'.$d->{'host'}.':'.$d->{'port'}.'/'.$d->{'service'}.':DEDICATED',
+                            $d->{'user'},
+                            $d->{'pass'});
+
+	if (not defined($dbh)) { 
+		$RUNNING = -101;
+		Logger::PrintMsg(Logger::ERROR, "$DBI::errstr making connection \n");
+		return undef;
+	}
+
+	SessionSetup($dbh);
+
+        return $dbh;
+}
+
 sub FirstStageWorker {
 	my $data_source = shift;
 	my $global_settings = shift;
 
 	my $dbh;
-	my $thisdb = $DATABASES{$worker_name};
-	my $tablename = ResolveMapping($TABLENAME, $worker_name);
+
+	my $worker_name = $data_source->{object}->{dbname};
+	my $tablename = $data_source->{object}->{table};
+	my $schema = $data_source->{object}->{owner};
+	my $partition_for = $data_source->{object}->{partition_for} if (defined($data_source->{object}->{partition_for}));
+	my $partition_name = $data_source->{object}->{partition_name} if (defined($data_source->{object}->{partition_name}));
+	my $pk_range = $data_source->{object}->{pk_range} if (defined($data_source->{object}->{pk_range}));
+
+	my $cmp_col = $global_settings->{compare_col} if ($global_settings->{compare_col});
+	my $cmp_hash = $global_settings->{compare_hash} if ($global_settings->{compare_hash});
 
 	my $msg = "FirstStageWorker[$worker_name] start - table: $tablename, ";
-	if ($PARTMAPPINGS{$worker_name}) {
-		$msg .= "partition mapped to: ".join(', ',@{$PARTMAPPINGS{$worker_name}}).", ";
-	} else {
-		$msg .= "partition: $PARTITION, " if ($PARTITION);
-	}
 
-	if ($CMP_COLUMN) {
-		PrintMsg ("$msg compare using column $CMP_COLUMN \n");
-	} elsif ($CMP_KEY_ONLY) {
-		PrintMsg ("$msg compare using PK/UK columns only \n");
-	} else {
+	if ($cmp_hash) {
 		PrintMsg ("$msg compare using SHA1 on all columns\n");
+	} elsif ($cmp_col) {
+		PrintMsg ("$msg compare using column $cmp_col \n");
+	} else {
+		PrintMsg ("$msg compare using PK/UK columns only \n");
 	}
 
 	{
-		lock($RUNNING);
-		$RUNNING++;
+		lock($FIRST_STAGE_RUNNING);
+		$FIRST_STAGE_RUNNING++;
 	}
 	
-	$dbh = ConnectToDatabase($thisdb);
+	$dbh = ConnectToDatabase($worker_name, $data_source->{connection});
+
 	if (not defined($dbh)) {
-		lock($RUNNING);
+		lock($FIRST_STAGE_RUNNING++);
 		$RUNNING=-102;
 		return -1;
 	}
-	SessionSetup($dbh, $thisdb);
 
+->
 	{
 		lock(%COLUMNS);
 		if (GetColumns($dbh, $tablename, $worker_name)<0) {
@@ -1362,7 +1417,7 @@ sub CoordinatorProcess { #we are forked process that is supposed to compare give
 	my $out_pipe = shift; #this pipe is for sending output data to main process
 	my $args_ref = shift; #this is reference to hash
 	# { datasources => { dbname => { connection => { user=>user1, pass=>pass1, host=>dbhost1, port=>dbport1, service=>dbservice },
-         #              	   	         object => { schema => user, table => tab1, partition_name => part1, partition_for => '..', pk_range => '..'},
+         #              	   	         object => { owner => user, table => tab1, partition_name => part1, partition_for => '..', pk_range => '..'},
 		#				 name => 'user.tab1.part', #skrocona wersja partition for/partition name albo/skrocona wersja pk_range - sluzy do wyswietlania
 		#				},
 		#			dbname2 => {
@@ -1374,7 +1429,7 @@ sub CoordinatorProcess { #we are forked process that is supposed to compare give
                 #	settings => {
 		#			primary => ..., which database is primary
                        #                 compare_col => ....,
-                        #                compare_row => sha1
+                        #                compare_hash => sha1
                          #               pk_transformation => 'sub { .... } returns' ??? (w DIFFS dla kazdego klucza zmodyfikowanego powinien byc zapisany w %PK_ORIGINALS oryginalne wartosci dla porownywarki w stage 2
                           #              select_concurency => 1
                            #             stage2_rounds => 5,
