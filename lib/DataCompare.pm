@@ -121,193 +121,7 @@ my $SWITCH_TO_CMP_PK_IF_NEEDED = 1; #allow to switch automatically to PK/U compa
 
 
 
-sub PrintMsg {
-	my $h = '';
-	$h = "[$$ $TABLENAME".(($PARTITION)?" $PARTITION":'')."] " if ($PRINT_HEADER > 0);
-	if (defined($LOGFILE)) {
-		lock($LOGFILE);
-		my $f;
 
-		open $f,">>$LOGFILE";
-		print $f $h, @_;
-		close $f;
-	}
-	print STDERR $h, @_;
-	STDERR->flush(); #force flushing - it may be end of a pipe
-}
-
-sub ReadKey {
-	my ($term, $oterm, $echo, $noecho );
-	$term     = POSIX::Termios->new();
-	$term->getattr(fileno(STDIN));
-	$oterm     = $term->getlflag();
-	$echo     = ECHO | ECHOK | ICANON;
-	$term->setlflag($oterm & ~$echo);
-	$term->setattr(fileno(STDIN), TCSANOW);
-	sysread(STDIN, $_, 1);
-	$term->setlflag($oterm);
-	$term->setattr(fileno(STDIN), TCSANOW);
-	return $_;
-}
-
-sub GetPass {
-        my $prompt = shift;
-        my $i='';
-        my $pass;
-        print STDERR $prompt;
-        while (($i=ReadKey()) ne "\n") {
-                $pass.=$i;
-        }
-        chomp($pass) if (defined($pass));
-	print STDERR "\n";
-        return $pass;
-}
-
-
-sub GetParams {
-	my @DBS;
-	my $i = 1;
-	my @exclude_cols;
-	my $concurency;
-	my %maps;
-	my %mapparts;
-	my $help = 0;
-	my ($part,$partfor);
-
-	GetOptions ('db|d=s' => \@DBS,
-		    'table|t=s' => \$TABLENAME,
-		    'comparecolumn|comparecol|c=s' => \$CMP_COLUMN,
-		    'keyonly'=> \$CMP_KEY_ONLY,
-		    'excludecolumn|excludecol=s' => \@exclude_cols,
-	            'verbose|v+' => \$DEBUG,
-		    'parallel|p=i' => \$concurency,
-		    'rounds|r=i' => \$ROUNDS,
-		    'sleep|s=i' => \$SECONDSTAGESLEEP,
-		    'map|m=s' => \%maps,
-		    'mappartition=s' => \%mapparts,
-		    'partition=s' => \$part,
-		    'limiter=s' => \$LIMITER,
-		    'partitionfor=s' => \$partfor,
-		    'checktype!' => \$CHECK_COL_TYPE,
-		    'checknullable!' => \$CHECK_COL_NULLABLE,
-		    'help|h' => \$help,
-		    'logfile|l=s' => \$LOGFILE) or $help=100;
-	
-	if ($help) {
-               # pod2usage(1);
-                pod2usage( -verbose => 2, -exitval => 1, -output  => \*STDOUT);
-                exit 0;
-        }
-
-	if (scalar(@DBS) < 2) {
-		PrintMsg "ERROR: At least 2 database connections are needed.\n";
-		exit 1;
-	}
-
-	foreach my $d (@DBS) {
-		my $dbname;
-		my %db;
-		my $shareddb = &share(\%db);
-
-		if ($d =~ /(?:([\w\d]+)=)?([\w\d]+)(?:\/([\w\d]+))?\@([\w\d\.\-]+)(?::(\d+))?\/([\w\d]+)/) {
-			   #alias, user, pass, host, port, service
-			($db{'ALIAS'}, $db{'USER'}, $db{'PASS'}, $db{'HOST'}, $db{'PORT'}, $db{'SERVICE'}) = ($1, $2, $3, $4, $5, $6);
-		} else {
-			PrintMsg "ERROR: Connect string $d doesn't match the right format: [alias=]user[/pass]\@host[:port]/service\n";
-			exit 1;
-		}
-		
-		if (not defined($db{'PASS'})) {
-			$db{'PASS'} = GetPass("Password for $d:");
-		}
-
-		if (not defined($db{'ALIAS'})) { #is there name-alias given for this connection string?
-			$db{'ALIAS'} = "DB$i";
-		}
-		$dbname = $db{'ALIAS'};
-
-		if (defined($PROGRESS{$dbname})) { # check if name $db{'ALIAS'} is already taken
-			PrintMsg "ERROR: alias $db{'ALIAS'} for $d is already taken. Please choose another.\n";
-			exit 1;
-		}
-
-
-		$DATABASES{$dbname} = $shareddb;
-		$DIFFS{$dbname} = &share({});
-		$PROGRESS{$dbname} = 0;
-		$DATABASES{$dbname}->{'NAME'} = $dbname;
-
-		$i++;
-	}
-
-	if (not defined($TABLENAME)) {
-		PrintMsg "ERROR: Table name is needed. --table=[owner.]table_name\n";
-		exit 1;
-	} 
-
-	foreach my $m (keys %maps) {
-		if (not defined($PROGRESS{$m})) {
-			PrintMsg "ERROR: Invalid mapping parameter. There is no $m defined.\n";
-			exit 1;
-		} else { #for now we accept only one table, in future there will be some
-			# oldschema.oldtable:newschema.newtable
-			$MAPPINGS{$m} = uc($maps{$m});
-			# at the moment oldschema.oldtable is always the same: $TABLENAMES[0] -> changed to $TABLENAME 15.01.2017
-			# so map is just newschema.newtable
-		}
-	}
-
-	foreach my $mp (keys %mapparts) {
-		my @pmaps= split(/,/,uc($mapparts{$mp}));
-		$PARTMAPPINGS{$mp} = &share([]);
-		@{$PARTMAPPINGS{$mp}} = @pmaps;
-		PrintMsg "Partition mappings: $mp -> ",join(':',@{$PARTMAPPINGS{$mp}}),"\n" if ($DEBUG > 2);
-	}
-	
-	if (defined($part) and defined($partfor)) {
-		PrintMsg "ERROR: You cannot provide both --partition and --partitionfor parameters.\n";
-		exit 1;
-	} 
-
-	if (scalar keys %PARTMAPPINGS > 0 && not defined($part)) {
-		PrintMsg "ERROR: You have to provide --partition parameter to use --mappartition.\n";
-		exit 1;
-	}
-
-	if (defined($part)) {
-		$PARTITION = " PARTITION ($part)";
-	} elsif (defined($partfor)) {
-		$PARTITION = " PARTITION FOR ($partfor)";
-	}
-
-	@exclude_cols = split(/,/,uc(join(',',@exclude_cols)));
-	map { $EXCLUDE_COLUMNS{$_} = 1 } @exclude_cols; #change list to hash for easy look up
-
-	$PARALLEL = " /*+ PARALLEL($concurency) */ " if (defined $concurency);
-	$CMP_COLUMN = uc($CMP_COLUMN) if (defined($CMP_COLUMN));
-	#@TABLENAMES = split(/,/,uc(join(',',@TABLENAMES)));
-	$TABLENAME = uc($TABLENAME);
-
-	if (defined($CMP_COLUMN) && $CMP_KEY_ONLY > 0) {
-		PrintMsg "ERROR: Parameters --comparecol and --keyonly are mutual exclusive.\n";
-                exit 1;
-	}
-}
-
-
-sub ResolveMapping {
-	my $oldtable = shift;
-	my $dbname = shift;
-
-
-	if (defined($MAPPINGS{$dbname})) {
-		PrintMsg "ResolveMapping: changed $oldtable to $MAPPINGS{$dbname} for $dbname\n" if ($DEBUG>0);
-		return $MAPPINGS{$dbname};
-	} else {
-		return $oldtable;
-	}
-
-}
 
 sub ConnectToDatabase {
 	my $d = shift;
@@ -1088,6 +902,7 @@ sub DataCompare {
 my $SECONDSTAGESLEEP = 30; #wait 30 seconds between each 2nd stage lookup pass
 my $SECONDSTAGETRIES = 5; #how many 2nd stage lookup passes
 my $FIRST_STAGE_RUNNING :shared;
+my %COLUMNS :shared;
 my $BATCH_SIZE = 10000; #how many rows to process at once
 
 use constant PROCESS_NAME = 'DataCompare';
@@ -1121,55 +936,6 @@ sub SetProcessName {
 	$0 = $new_name;
 }
 
-sub SessionSetup {
-	my $dbh = shift;
-
-	$dbh->{RaiseError} = 0; #dont die imediately
-        $dbh->{RowCacheSize} = $BATCH_SIZE; 
-
-	$dbh->do("ALTER SESSION SET NLS_DATE_FORMAT='YYYY-MM-DD HH24:MI:SS'");
-	$dbh->do("ALTER SESSION SET NLS_TIMESTAMP_FORMAT='YYYY-MM-DD HH24:MI:SS.FF'");
-#	uncomment to force buffered reads instead direct reads
-#	#$dbh->do('alter session set "_parallel_cluster_cache_policy" = CACHED');
-#	#$dbh->do('alter session set PARALLEL_FORCE_LOCAL = true');
-#	#$dbh->do('alter session set  "_serial_direct_read" = never');
-#	#$dbh->do('alter session set "_very_large_object_threshold" = 1000000000');
-#	my $r = $dbh->selectrow_hashref("select SYS_CONTEXT ('USERENV','INSTANCE_NAME') INST, SYS_CONTEXT ('USERENV','DB_NAME') DB from dual");
-	
-#	$db->{'INSTANCE_NAME'}=$r->{'INST'};
-#	$db->{'DB_NAME'}=$r->{'DB'};
-}
-
-sub ConnectToDatabase {
-	my $worker_name = shift;
-	my $d = shift;
-        my $dbh;
-
-	if (not defined($d->{'pass'})) {
-		Logger::PrintMsg(Logger::ERROR, "$worker_name: no password given\n");
-		return undef;
-	}
-
-	if (not defined($d->{'port'})) {
-                $d->{'port'} = 1521;
-        }
-
-	Logger::PrintMsg(Logger::DEBUG, "$worker_name: dbi:Oracle://$d->{host}:$d->{port}/$d->{service} user: $d->{user}\n");
-#  $dbh = DBI->connect('dbi:Oracle:host=foobar;sid=ORCL;port=1521;SERVER=POOLED', 'scott/tiger', '')
-        $dbh = DBI->connect('dbi:Oracle://'.$d->{'host'}.':'.$d->{'port'}.'/'.$d->{'service'}.':DEDICATED',
-                            $d->{'user'},
-                            $d->{'pass'});
-
-	if (not defined($dbh)) { 
-		$RUNNING = -101;
-		Logger::PrintMsg(Logger::ERROR, "$DBI::errstr making connection \n");
-		return undef;
-	}
-
-	SessionSetup($dbh);
-
-        return $dbh;
-}
 
 sub FirstStageWorker {
 	my $data_source = shift;
@@ -1202,25 +968,25 @@ sub FirstStageWorker {
 		$FIRST_STAGE_RUNNING++;
 	}
 	
-	$dbh = ConnectToDatabase($worker_name, $data_source->{connection});
+	$dbh = Database::Connect($data_source->{connection}, $worker_name);
 
 	if (not defined($dbh)) {
-		lock($FIRST_STAGE_RUNNING++);
-		$RUNNING=-102;
+		lock($FIRST_STAGE_RUNNING);
+		$FIRST_STAGE_RUNNING=-102;
 		return -1;
 	}
 
-->
 	{
 		lock(%COLUMNS);
-		if (GetColumns($dbh, $tablename, $worker_name)<0) {
-			lock($RUNNING);
-			$RUNNING=-103;
+		
+		if (Database::GetColumns(\%COLUMNS, $dbh, $data_source->{object}, $worker_name, Database::CHECK_COLUMN_TYPE || Database::CHECK_COLUMN_NULLABLE) < 0) {
+			lock($FIRST_STAGE_RUNNING);
+			$FIRST_STAGE_RUNNING=-103;
 			return -1;
 		}
 		if (GetPrimaryKey($dbh, $tablename, $worker_name)<0) { #error
-			lock($RUNNING);
-			$RUNNING=-104;
+			lock($FIRST_STAGE_RUNNING);
+			$FIRST_STAGE_RUNNING=-104;
 			return -1;
 		}
 	}
