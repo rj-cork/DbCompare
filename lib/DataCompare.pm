@@ -34,6 +34,10 @@ use Storable qw(freeze thaw dclone);
 use Pod::Usage;
 use FileHandle;
 
+
+use Logger;
+use Database;
+
 #
 #  1) Read parameters GetParams()
 #
@@ -902,7 +906,7 @@ sub DataCompare {
 my $SECONDSTAGESLEEP = 30; #wait 30 seconds between each 2nd stage lookup pass
 my $SECONDSTAGETRIES = 5; #how many 2nd stage lookup passes
 my $FIRST_STAGE_RUNNING :shared;
-my %COLUMNS :shared;
+my %COLUMNS :shared; #store information about table columns, shared across all workers
 my $BATCH_SIZE = 10000; #how many rows to process at once
 
 use constant PROCESS_NAME = 'DataCompare';
@@ -972,23 +976,36 @@ sub FirstStageWorker {
 
 	if (not defined($dbh)) {
 		lock($FIRST_STAGE_RUNNING);
-		$FIRST_STAGE_RUNNING=-102;
+		$FIRST_STAGE_RUNNING = -102;
 		return -1;
 	}
 
+
 	{
 		lock(%COLUMNS);
-		
-		if (Database::GetColumns(\%COLUMNS, $dbh, $data_source->{object}, $worker_name, Database::CHECK_COLUMN_TYPE || Database::CHECK_COLUMN_NULLABLE) < 0) {
+
+		my $checks = Database::CHECK_COLUMN_TYPE || Database::CHECK_COLUMN_NULLABLE;
+
+		if (Database::GetColumns(\%COLUMNS, $dbh, $data_source->{object}, $worker_name, $checks) < 0) {
 			lock($FIRST_STAGE_RUNNING);
 			$FIRST_STAGE_RUNNING=-103;
 			return -1;
 		}
-		if (GetPrimaryKey($dbh, $tablename, $worker_name)<0) { #error
-			lock($FIRST_STAGE_RUNNING);
-			$FIRST_STAGE_RUNNING=-104;
-			return -1;
-		}
+
+ if ($CMP_KEY_ONLY == 0 && $SWITCH_TO_CMP_PK_IF_NEEDED > 0) { #switch to PK compare mode if all columns are in PK. CMP_KEY_ONLY=1
+                foreach my $c (keys %COLUMNS) {
+                        #if the column is not to be excludes and if is not part of PK/UK then we are able to calculate sha1 if needed
+                        if (!defined($EXCLUDE_COLUMNS{$c}) && !defined($COLUMNS{$c}->{CONSTRAINT})) { #should be P or U if column is part of PK/U constraint 
+                                PrintMsg ("GetPrimaryKey($wname): Found column which is not in PK/U: $c\n") if ($DEBUG>0);
+                                return 0;
+                        }
+                }
+                PrintMsg ("GetPrimaryKey($wname): All columns are included in PK/U constraint. Switching to keyonly comparison mode.\n");
+                #$LIMITER = '1=1';
+                $CMP_KEY_ONLY = 1;
+        }
+
+
 	}
 
 	my @PK_COLUMNS = sort { $COLUMNS{$a}->{CPOSITON} <=> $COLUMNS{$b}->{CPOSITON} } grep {defined $COLUMNS{$_}->{CPOSITON}} keys %COLUMNS;
