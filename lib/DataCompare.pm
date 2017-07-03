@@ -940,6 +940,9 @@ sub SetProcessName {
 	$0 = $new_name;
 }
 
+use constant COMPARE_USING_COLUMN = 2;
+use constant COMPARE_USING_SHA1 = 1;
+use constant COMPARE_USING_PK = 0;
 
 sub FirstStageWorker {
 	my $data_source = shift;
@@ -953,19 +956,24 @@ sub FirstStageWorker {
 	my $partition_for = $data_source->{object}->{partition_for} if (defined($data_source->{object}->{partition_for}));
 	my $partition_name = $data_source->{object}->{partition_name} if (defined($data_source->{object}->{partition_name}));
 	my $pk_range = $data_source->{object}->{pk_range} if (defined($data_source->{object}->{pk_range}));
-
-	my $cmp_col = $global_settings->{compare_col} if ($global_settings->{compare_col});
-	my $cmp_hash = $global_settings->{compare_hash} if ($global_settings->{compare_hash});
+	my $cmp_method = COMPARE_USING_PK;
 
 	my $msg = "FirstStageWorker[$worker_name] start - table: $tablename, ";
 
-	if ($cmp_hash) {
-		PrintMsg ("$msg compare using SHA1 on all columns\n");
-	} elsif ($cmp_col) {
-		PrintMsg ("$msg compare using column $cmp_col \n");
+	if (defined($global_settings->{compare_col})) {
+
+		$cmp_method = COMPARE_USING_PK;
+		Logger::PrintMsg (Logger::DEBUG2, "$msg compare using column ".$global_settings->{compare_col});
+
+	} elsif (defined($global_settings->{compare_hash})) {
+
+		$cmp_method = COMPARE_USING_SHA1;
+		Logger::PrintMsg (Logger::DEBUG2, "$msg compare using SHA1 on all columns");
+
 	} else {
-		PrintMsg ("$msg compare using PK/UK columns only \n");
+		Logger::PrintMsg (Logger::DEBUG2, "$msg compare using PK/UK columns only");
 	}
+
 
 	{
 		lock($FIRST_STAGE_RUNNING);
@@ -981,7 +989,7 @@ sub FirstStageWorker {
 	}
 
 
-	{
+	{ #critical section for %COLUMNS hash
 		lock(%COLUMNS);
 
 		my $checks = Database::CHECK_COLUMN_TYPE || Database::CHECK_COLUMN_NULLABLE;
@@ -992,54 +1000,49 @@ sub FirstStageWorker {
 			return -1;
 		}
 
- if ($CMP_KEY_ONLY == 0 && $SWITCH_TO_CMP_PK_IF_NEEDED > 0) { #switch to PK compare mode if all columns are in PK. CMP_KEY_ONLY=1
-                foreach my $c (keys %COLUMNS) {
-                        #if the column is not to be excludes and if is not part of PK/UK then we are able to calculate sha1 if needed
-                        if (!defined($EXCLUDE_COLUMNS{$c}) && !defined($COLUMNS{$c}->{CONSTRAINT})) { #should be P or U if column is part of PK/U constraint 
-                                PrintMsg ("GetPrimaryKey($wname): Found column which is not in PK/U: $c\n") if ($DEBUG>0);
-                                return 0;
+ 		if ($cmp_method != COMPARE_USING_PK) {
+
+			#change list of excluded columns into hash
+			my %excl_col = map {$_=>1} @{$global_settings->{exclude_cols}}; 
+
+			#switch to PK compare mode if all columns are in PK.
+                	foreach my $c (keys %COLUMNS) {
+				next if ($excl_col{$c}); #this column is excluded
+				next if ($COLUMNS{$c}->{CONSTRAINT}); #this column is in PK/UK
+				
+				$cmp_method = COMPARE_USING_PK;
+				last;
                         }
+
+			if ($cmp_method == COMPARE_USING_PK) { #switched to PK compare mode
+				undef $global_settings->{compare_col} if (defined($global_settings->{compare_col}));
+				undef $global_settings->{compare_hash} if (defined($global_settings->{compare_hash}));
+                		Logger::PrintMsg(Logger::WARNING, $worker_name, "Switching to keyonly comparison mode. All columns for comparison are in PK.");
+			}
                 }
-                PrintMsg ("GetPrimaryKey($wname): All columns are included in PK/U constraint. Switching to keyonly comparison mode.\n");
-                #$LIMITER = '1=1';
-                $CMP_KEY_ONLY = 1;
         }
 
+	my @pk_cols = sort { $COLUMNS{$a}->{CPOSITON} <=> $COLUMNS{$b}->{CPOSITON} } grep {defined $COLUMNS{$_}->{CPOSITON}} keys %COLUMNS;
 
-	}
-
-	my @PK_COLUMNS = sort { $COLUMNS{$a}->{CPOSITON} <=> $COLUMNS{$b}->{CPOSITON} } grep {defined $COLUMNS{$_}->{CPOSITON}} keys %COLUMNS;
-
-	PrintMsg( "FirstStageWorker[$worker_name] PrimaryKey/Unique: ", join(',',@PK_COLUMNS),"\n");
-
+	# prepare select statement
 	my $sql;
-	my $orderby = ' ORDER BY '.join(',',@PK_COLUMNS);
+	my $orderby = ' ORDER BY '.join(',', @pk_cols);
 
-	if (defined($PARTMAPPINGS{$worker_name}) && scalar(@{$PARTMAPPINGS{$worker_name}}) > 0 && $PARTITION) {
-		my $hook = '';
-		foreach my $partmap (@{$PARTMAPPINGS{$worker_name}}) {
-			$partmap = " PARTITION ($partmap) ";
-			if (defined($CMP_COLUMN)) {
-				$sql .= $hook.'SELECT '.join(',',@PK_COLUMNS).','.$CMP_COLUMN.' CMP#VALUE FROM '.$tablename.$partmap.' WHERE '.$LIMITER;
-			} elsif ($CMP_KEY_ONLY) {
-				$sql .= $hook.'SELECT '.join(',',@PK_COLUMNS).", 'exists' CMP#VALUE FROM ".$tablename.$PARTITION.' WHERE '.$LIMITER;
-			} else {
-				$sql .= $hook.SHA1Sql(@PK_COLUMNS).$tablename.$partmap;
-			}
-			$hook = "\n UNION ALL \n";
-		}
-		$sql .= $orderby;
-	} else {
-		if (defined($CMP_COLUMN)) {
-			$sql = 'SELECT '.join(',',@PK_COLUMNS).','.$CMP_COLUMN.' CMP#VALUE FROM '.$tablename.$PARTITION.' WHERE '.$LIMITER.$orderby;
-		} elsif ($CMP_KEY_ONLY) {
-			$sql = 'SELECT '.join(',',@PK_COLUMNS).", 'exists' CMP#VALUE FROM ".$tablename.$PARTITION.' WHERE '.$LIMITER.$orderby;
-		} else {
-			$sql = SHA1Sql(@PK_COLUMNS).$tablename.$PARTITION.$orderby;
-		}
+	if ($cmp_method == COMPARE_USING_COLUMN) {
+
+		$sql = 'SELECT '.join(',',@PK_COLUMNS).','.$CMP_COLUMN.' CMP#VALUE FROM '.$tablename.$PARTITION.' WHERE '.$LIMITER.$orderby;
+
+	} elsif ($cmp_method == COMPARE_USING_SHA1) {
+
+		$sql = Database::SHA1Sql(@PK_COLUMNS).$tablename.$PARTITION.$orderby;
+
+	} else { #COMPARE_USING_PK
+
+		$sql = 'SELECT '.join(',',@PK_COLUMNS).", 'exists' CMP#VALUE FROM ".$tablename.$PARTITION.' WHERE '.$LIMITER.$orderby;
+
 	}
-
-	PrintMsg( "[$worker_name] $sql\n") if ($DEBUG>0);
+>
+	Logger::PrintMsg( Logger::DEBUG, $worker_name, "$sql");
 
 	my $prep = $dbh->prepare($sql);
 	if(!defined($prep) or $dbh->err) { 
