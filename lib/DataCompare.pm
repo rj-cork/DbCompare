@@ -1022,28 +1022,15 @@ sub FirstStageWorker {
                 }
         }
 
-	my @pk_cols = sort { $COLUMNS{$a}->{CPOSITON} <=> $COLUMNS{$b}->{CPOSITON} } grep {defined $COLUMNS{$_}->{CPOSITON}} keys %COLUMNS;
-
 	# prepare select statement
-	my $sql;
-	my $orderby = ' ORDER BY '.join(',', @pk_cols);
+	my $sql = Database::PrepareFirstStageSelect($data_source->{object}, 
+							\%COLUMNS, 
+							$cmp_method, 
+							$global_settings->{exclude_cols},
+							$global_settings->{select_concurency});
 
-	if ($cmp_method == COMPARE_USING_COLUMN) {
-
-		$sql = 'SELECT '.join(',',@PK_COLUMNS).','.$CMP_COLUMN.' CMP#VALUE FROM '.$tablename.$PARTITION.' WHERE '.$LIMITER.$orderby;
-
-	} elsif ($cmp_method == COMPARE_USING_SHA1) {
-
-		$sql = Database::SHA1Sql(@PK_COLUMNS).$tablename.$PARTITION.$orderby;
-
-	} else { #COMPARE_USING_PK
-
-		$sql = 'SELECT '.join(',',@PK_COLUMNS).", 'exists' CMP#VALUE FROM ".$tablename.$PARTITION.' WHERE '.$LIMITER.$orderby;
-
-	}
+	Logger::PrintMsg(Logger::DEBUG, $worker_name, "$sql");
 >
-	Logger::PrintMsg( Logger::DEBUG, $worker_name, "$sql");
-
 	my $prep = $dbh->prepare($sql);
 	if(!defined($prep) or $dbh->err) { 
 		$RUNNING = -106;

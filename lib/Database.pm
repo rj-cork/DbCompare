@@ -248,44 +248,85 @@ sub GetColumns {
 
 }
 
-sub SHA1Sql {
-	my @pk = @_;
-	my $sql = 'SELECT '.$PARALLEL.join(',',@pk).", DBMS_CRYPTO.Hash(\n";
-	my $separator='';
-        foreach my $i (sort { $COLUMNS{$a}->{'COLUMN_ID'} <=> $COLUMNS{$b}->{'COLUMN_ID'} } keys %COLUMNS) {
+sub PrepareFirstStageSelect {
+	my $object = shift;
+	my $columns = shift;
+	my $cmp_method = shift;
+	my $settings = shift;
 
-		next if (defined($COLUMNS{$i}->{CPOSITON})); #don't include this column in SHA1 if it is part of constraint PK/UK
+	my $parallel = shift;
+	
+	#get pk columns
+	my @pk = sort { $columns{$a}->{CPOSITON} <=> $columns{$b}->{CPOSITON} } grep {defined $columns{$_}->{CPOSITON}} keys %{$columns};
 
-		if (defined($EXCLUDE_COLUMNS{$i})) { #check if we want to skip this column
-			PrintMsg ("SHA1Sql(): Skipping column $i\n") if ($DEBUG>1);
-			next;
-		}
+	#map excluded columns from array to hash
+	my %excl_col = map {$_=>1} @{$settings->{exclude_cols}}; #map from array to hash
 
-                if ($COLUMNS{$i}->{DATA_TYPE} eq 'BLOB' || $COLUMNS{$i}->{DATA_TYPE} eq 'CLOB' ) {
-			if (defined $COLUMNS{$i}->{NULLABLE}) {
-	                        $sql .= $separator."DBMS_CRYPTO.Hash(NVL($i,'00'),3)\n"; #NVL(some data, some hex as alternative);
-			} else {
-	                        $sql .= $separator."DBMS_CRYPTO.Hash($i,3)\n";
-			}
-                } elsif ( $COLUMNS{$i}->{DATA_TYPE} eq 'XMLTYPE') {
-			if (defined $COLUMNS{$i}->{NULLABLE}) {
-				#$sql .= $separator."DBMS_CRYPTO.Hash(NVL(XMLType.getBlobVal($i,nls_charset_id('AL32UTF8')),'00'),3)\n"; 
-                                # with getBlobVal parallel doesn't work, but hash is working strange way
-                                $sql .= $separator."DBMS_CRYPTO.Hash(NVL2($i,XMLType.getClobVal($i),'00'),3)\n";
-			} else {
-	                        #$sql .= $separator."DBMS_CRYPTO.Hash(XMLType.getBlobVal($i,nls_charset_id('AL32UTF8'),3)\n";
-				$sql .= $separator."DBMS_CRYPTO.Hash(XMLType.getClobVal($i),3)\n";
-			}
-                } else {
-			if (defined $COLUMNS{$i}->{NULLABLE}) {
-                        	$sql .= $separator."DBMS_CRYPTO.Hash(NVL(utl_raw.cast_to_raw($i),'00'),3)\n";
-			} else {
-	                        $sql .= $separator."DBMS_CRYPTO.Hash(utl_raw.cast_to_raw($i),3)\n";
-			}
-                }
-                $separator='||';
-        }       
-	$sql .= ",3) CMP#VALUE FROM ";
+	
+	my $tablename = $object->{table};
+        my $schema = $object->{owner};
+	my $partition = '';
+	my $range = '';
+
+	$partition = $object->{partition_name} if (defined($object->{partition_name}));
+	$partition = $object->{partition_for} if (defined($object->{partition_for}));
+	$range = $object->{pk_range} if (defined($object->{pk_range}));
+
+	my $sql = 'SELECT ';
+
+        if ($cmp_method == COMPARE_USING_COLUMN) {
+
+                $sql .= join(',', @pk).','.$settings->{compare_col};
+
+        } elsif ($cmp_method == COMPARE_USING_SHA1) {
+
+		my $separator='';
+		$sql .=  " /*+ PARALLEL($parallel) */ " if ($parallel);
+		$sql .= join(',', @pk).", DBMS_CRYPTO.Hash(\n";
+
+	        foreach my $i (sort { $columns{$a}->{'COLUMN_ID'} <=> $columns{$b}->{'COLUMN_ID'} } keys %{$columns}) {
+
+			#don't include this column in SHA1 if it is part of constraint PK/UK
+			next if (defined($columns{$i}->{CPOSITON})); 
+
+			next if (defined($excl_col{$i})); #check if we want to skip this column
+
+	                if ($columns{$i}->{DATA_TYPE} eq 'BLOB' || $columns{$i}->{DATA_TYPE} eq 'CLOB' ) {
+				if (defined $columns{$i}->{NULLABLE}) {
+	        	                $sql .= $separator."DBMS_CRYPTO.Hash(NVL($i,'00'),3)\n"; #NVL(some data, some hex as alternative);
+				} else {
+		                        $sql .= $separator."DBMS_CRYPTO.Hash($i,3)\n";
+				}
+	                } elsif ( $columns{$i}->{DATA_TYPE} eq 'XMLTYPE') {
+				if (defined $columns{$i}->{NULLABLE}) {
+					#$sql .= $separator."DBMS_CRYPTO.Hash(NVL(XMLType.getBlobVal($i,nls_charset_id('AL32UTF8')),'00'),3)\n"; 
+	                                # with getBlobVal parallel doesn't work, but hash is working strange way
+	                                $sql .= $separator."DBMS_CRYPTO.Hash(NVL2($i,XMLType.getClobVal($i),'00'),3)\n";
+				} else {
+		                        #$sql .= $separator."DBMS_CRYPTO.Hash(XMLType.getBlobVal($i,nls_charset_id('AL32UTF8'),3)\n";
+					$sql .= $separator."DBMS_CRYPTO.Hash(XMLType.getClobVal($i),3)\n";
+				}
+	                } else {
+				if (defined $columns{$i}->{NULLABLE}) {
+	                        	$sql .= $separator."DBMS_CRYPTO.Hash(NVL(utl_raw.cast_to_raw($i),'00'),3)\n";
+				} else {
+		                        $sql .= $separator."DBMS_CRYPTO.Hash(utl_raw.cast_to_raw($i),3)\n";
+				}
+	                }
+	                $separator='||';
+	        }       
+		$sql .= ",3)";
+
+        } else { #COMPARE_USING_PK
+
+                $sql .= join(',', @pk).", 1";
+
+        }
+
+	$sql .= " CMP#VALUE FROM $schema.$tablename $partition WHERE $range ORDER BY ".join(',', @pk);
+
+
+	return $sql;
 }
 
 
