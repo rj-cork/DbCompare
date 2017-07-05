@@ -908,6 +908,9 @@ my $SECONDSTAGETRIES = 5; #how many 2nd stage lookup passes
 my $FIRST_STAGE_RUNNING :shared;
 my %COLUMNS :shared; #store information about table columns, shared across all workers
 my $BATCH_SIZE = 10000; #how many rows to process at once
+my $MAX_DIFFS = $BATCH_SIZE*10; #maximum out of sync recorded records. it is sefety limit
+				#so the script will not allocate whole memory if
+				#something goes wrong
 my %FIRST_STAGE_BATCH_PROGRESS :shared; # shared variable for workers synchronisation at the end of each batch processing
 my $WORKER_THREADS_COUNT; #number of workers/datasources
 
@@ -1035,79 +1038,89 @@ sub FirstStageWorker {
 	my $prep = $dbh->prepare($sql);
 	if(!defined($prep) or $dbh->err) { 
 		$RUNNING = -106;
-		Logger::PrintMsg(Logger::ERROR, $worker_name, "$DBI::errstr for [$sql]\n");
+		Logger::PrintMsg(Logger::ERROR, $worker_name, "$DBI::errstr for [$sql]");
 		return -1;
 	}
 
 	$prep->execute();
 	if(!defined($prep) or $dbh->err) { 
 		$RUNNING = -107;
-		Logger::PrintMsg(Logger::ERROR, $worker_name, "$DBI::errstr for [$sql]\n");
+		Logger::PrintMsg(Logger::ERROR, $worker_name, "$DBI::errstr for [$sql]");
 		return -1;
 	}
 
-	my $i=0;
-	my ($val,$key);
+	my ($val,$key,$record_no,$total_out_of_sync);
 	while (my $aref = $prep->fetchall_arrayref(undef, $BATCH_SIZE)) {
 
-		lock(%DIFFS);
+		{ #%DIFFS lock
+			lock(%DIFFS);
 
-		my $in_sync_counter=0;
-		my $out_of_sync_counter=0;
-		my $thisdb_only_counter=0;
+			my $in_sync_counter=0;
+			my $out_of_sync_counter=0; #values for keys found in other databases that differs
+			my $thisdb_only_counter=0; #keys not found in other databases
 
-		my @dbs4comparison = grep {$_ ne $worker_name} keys %DIFFS; #list of databases/workers != this one
-		while (my $rref = shift(@{$aref})) {
+			my @dbs4comparison = grep {$_ ne $worker_name} keys %DIFFS; #list of databases/workers != this one
+		
+			#for each record stored in $rref
+			while (my $rref = shift(@{$aref})) {
 
-
-			PrintMsg( "[$worker_name] $i ",join('|',@{$rref}),"\n") if ($DEBUG>4);
-			$val = pop @{$rref}; #last column in row is value
-			$key = join('|',@{$rref}); #first columns (except the last one) are key
-
-			PrintMsg( "[$worker_name] $i key: [$key] value: $val\n") if ($DEBUG>4);
-
-			my $thesame = 1;
-			my $match = 1;
-			foreach my $k (@dbs4comparison) {
-				if ( defined($DIFFS{$k}->{$key}) ) { #there is matching key stored in some other DB
-					if ($DIFFS{$k}->{$key} ne $val) { #key exists but value differs
+				$val = pop @{$rref}; #last column in row is value
+				$key = join('|',@{$rref}); #first columns (except the last one) are key
+				Logger::PrintMsg(Logger::DEBUG2, $worker_name, " key: [$key] value: $val");
+	
+				my $thesame = 1;
+				my $match = 1;
+				foreach my $k (@dbs4comparison) {
+					if ( defined($DIFFS{$k}->{$key}) ) { #there is matching key stored in some other DB
+						if ($DIFFS{$k}->{$key} ne $val) { #key exists but value differs
+							$match = 0;
+							$out_of_sync_counter++;
+							last;
+						}
+					} else {
 						$match = 0;
-						$out_of_sync_counter++;
+						$thisdb_only_counter++;
 						last;
 					}
-				} else {
-					$match = 0;
-					$thisdb_only_counter++;
-					last;
 				}
-			}
-			if ($match) { #there are the same rows in other databases
-				#value stored in DIFFS{other_database} is the same as in fetched row in this database/worker
-				#records are the same - we can remove it from all hashes and increase the counter
-				foreach my $k (@dbs4comparison) {
-					delete ($DIFFS{$k}->{$key});
+
+				if ($match) { #there are the same rows in other databases
+					#value stored in DIFFS{other_database} is the same as in fetched row in this database/worker
+					#records are the same - we can remove it from all hashes and increase the counter
+					foreach my $k (@dbs4comparison) {
+						delete ($DIFFS{$k}->{$key});
+					}
+					$in_sync_counter++; #we just checked record synced across all databases
+				} else { #there are some differences for this record (missing or different value)
+					#lets add it to DIFFS hash for this worker -> its final for this pass it shouldnt be changed as $key is PK
+					#it may be deleted by other workers if they find that their records are the same
+					$DIFFS{$worker_name}->{$key} = $val;
 				}
-				$in_sync_counter++;
-			} else { #there are some differences for this record (missing or different value)
-				#lets add it to DIFFS hash for this worker -> its final for this pass it shouldnt be changed as $key is PK
-				#it may be deleted by other workers if they find that their records are the same
-				$DIFFS{$worker_name}->{$key} = $val;
+				$record_no++;
+				Logger::PrintMsg(Logger::DEBUG1, $worker_name, $record_no) if ($record_no % 1000000 == 0);
 			}
-			$i++;
-			PrintMsg( "[$worker_name] $i \n") if ($i % 1000000 == 0);
+
+			#check how many out of sync records is at the moment
+			my $max_oos = 0;
+			foreach my $d (keys %DIFFS) {
+				my $j = scalar(keys %{$DIFFS{$d}});
+				$max_oos = $j if ($j > $max_oos);
+			}
+			$total_out_of_sync = $max_oos;
+
+			#limit so the script will not whole memory if tables are totally different
+			if($OUTOFSYNCCOUNTER > $MAX_DIFFS) { 
+				$FIRST_STAGE_RUNNING=-108;
+				Logger::PrintMsg(Logger::ERROR, $worker_name, "Too many out of sync records: $total_out_of_sync limit is $MAX_DIFFS.");
+				$prep->finish;
+				$dbh->disconnect();
+				return -1;
+			}
 		}
 
-		#check how many out of sync records is at the moment
-		my $max_oos = 0;
-		foreach my $d (keys %DIFFS) {
-			my $j = scalar(keys %{$DIFFS{$d}});
-			$max_oos = $j if ($j > $max_oos);
-		}
-
-		$OUTOFSYNCCOUNTER = $max_oos;
-		PrintMsg( "[$worker_name] rows processed: $i; in sync: $in_sync_counter, ",
+		Logger::PrintMsg(Logger::DEBUG1, $worker_name, "Batch summary. Rows processed: $i, in sync: $in_sync_counter, ",
 			  "out of: $out_of_sync_counter, missing in other db: $thisdb_only_counter, ",
-			  "summary out of sync: $OUTOFSYNCCOUNTER \n")  if ($DEBUG>1);
+			  "total out of sync: $total_out_of_sync");
 		
 		#this is end of single batch processing
 		#synchronize all workers here, comparing speed is as fast as the slowest worker
@@ -1118,18 +1131,24 @@ sub FirstStageWorker {
 
 			my $p = $FIRST_STAGE_BATCH_PROGRESS{$worker_name};
 
-			while (1) {
-				my $in_sync = 1;
-
+			while(1) {
 				#check what progress is for other stages
+				my $in_sync = 1;
 				foreach my $k (keys %FIRST_STAGE_BATCH_PROGRESS) { 
-					$in_sync = 0 if ($FIRST_STAGE_BATCH_PROGRESS{$k} != $p);
+					#wait if there is any lagging worker
+					$in_sync = 0 if ($FIRST_STAGE_BATCH_PROGRESS{$k} < $p); #was != $p
+
+					Logger::PrintMsg(Logger::DEBUG2, $worker_name, "batch progres for $k is ".$FIRST_STAGE_BATCH_PROGRESS{$k});
 				}
 
-				#wait for others
-				cond_wait(%FIRST_STAGE_BATCH_PROGRESS) until ($in_sync); 
-			}
-			$FIRST_STAGE_BATCH_PROGRESS = 0;
+				#are we the last worker finishing this batch?
+				last if ($in_sync == 1); 
+
+				#wait for others if not
+				cond_wait(%FIRST_STAGE_BATCH_PROGRESS); 
+			} 
+
+			cond_broadcast(%FIRST_STAGE_BATCH_PROGRESS);
 		}
 
 
@@ -1138,17 +1157,11 @@ sub FirstStageWorker {
 	$prep->finish;
 	$dbh->disconnect();
 
-	#limit so the script will not whole memory if tables are totally different
-	if($OUTOFSYNCCOUNTER > $MAX_DIFFS) { 
-		$RUNNING = -108;
-		PrintMsg( "[$worker_name] ERROR: too many out of sync records. Max limit is $MAX_DIFFS.\n");
-		return -1;
-	}
 
-	PrintMsg( "FirstStageWorker[$worker_name] finished, total rows checked: $i\n");
+	Logger::PrintMsg(Logger::DEBUG, $worker_name, "FirstStageWorker finished: out of sync: $total_out_of_sync, total rows: $row_no.");
 	{
-		lock($RUNNING);
-		$RUNNING--;
+		lock($FIRST_STAGE_RUNNING);
+		$FIRST_STAGE_RUNNING--;
 	}
 }
 
