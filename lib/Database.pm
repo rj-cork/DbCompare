@@ -254,7 +254,7 @@ sub PrepareFirstStageSelect {
 	my $cmp_method = shift;
 	my $settings = shift;
 
-	my $parallel = shift;
+	my $parallel = $global_settings->{select_concurency};
 	
 	#get pk columns
 	my @pk = sort { $columns{$a}->{CPOSITON} <=> $columns{$b}->{CPOSITON} } grep {defined $columns{$_}->{CPOSITON}} keys %{$columns};

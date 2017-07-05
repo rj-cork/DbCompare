@@ -908,6 +908,8 @@ my $SECONDSTAGETRIES = 5; #how many 2nd stage lookup passes
 my $FIRST_STAGE_RUNNING :shared;
 my %COLUMNS :shared; #store information about table columns, shared across all workers
 my $BATCH_SIZE = 10000; #how many rows to process at once
+my %FIRST_STAGE_BATCH_PROGRESS :shared; # shared variable for workers synchronisation at the end of each batch processing
+my $WORKER_THREADS_COUNT; #number of workers/datasources
 
 use constant PROCESS_NAME = 'DataCompare';
 
@@ -1026,65 +1028,27 @@ sub FirstStageWorker {
 	my $sql = Database::PrepareFirstStageSelect($data_source->{object}, 
 							\%COLUMNS, 
 							$cmp_method, 
-							$global_settings->{exclude_cols},
-							$global_settings->{select_concurency});
+							$global_settings);
 
 	Logger::PrintMsg(Logger::DEBUG, $worker_name, "$sql");
->
+
 	my $prep = $dbh->prepare($sql);
 	if(!defined($prep) or $dbh->err) { 
 		$RUNNING = -106;
-		PrintMsg( "[$worker_name] ERROR: $DBI::errstr for [$sql]\n");
+		Logger::PrintMsg(Logger::ERROR, $worker_name, "$DBI::errstr for [$sql]\n");
 		return -1;
 	}
 
 	$prep->execute();
 	if(!defined($prep) or $dbh->err) { 
 		$RUNNING = -107;
-		PrintMsg( "[$worker_name] ERROR: $DBI::errstr for [$sql]\n");
+		Logger::PrintMsg(Logger::ERROR, $worker_name, "$DBI::errstr for [$sql]\n");
 		return -1;
 	}
 
 	my $i=0;
 	my ($val,$key);
-	while (my $aref = $prep->fetchall_arrayref(undef, $MAX_ROWS)) {
-
-		my $s=2;
-		{
-			lock(%PROGRESS);
-
-			my $p = $PROGRESS{$worker_name};
-			foreach my $k (keys %PROGRESS) { #$p is the smallest progress for all workers
-				$p = $PROGRESS{$k} if ($PROGRESS{$k}<$p);
-			}
-
-			#if the smallest progress is >0 then all are downloading data now and sql execution phase has ended across all databases
-			if ($p > 0) {
-				PrintMsg( "FirstStageWorker: sql execution finished across all workers.\n") if ($print_exec_finished);
-				$print_exec_finished = 0;
-			}
-
-			#$s is the difference between this worker and the slowest one
-			$s=$PROGRESS{$worker_name}-$p;
-
-			until($s < 20) { #the difference cannot be bigger than 112 - around 500MB RAM per database connection for MAX_ROWS=10000
-				PrintMsg( "[$worker_name] batch no. $PROGRESS{$worker_name} is $s ahead others, waiting\n") if ($DEBUG>0);
-				#find worker with the smallest progress different than this one
-				$p = $PROGRESS{$worker_name};
-				foreach my $k (keys %PROGRESS) {
-					$p = $PROGRESS{$k} if ($PROGRESS{$k}<$p);
-				}
-				#$s is the difference between this worker and the slowest one
-				$s = $PROGRESS{$worker_name}-$p;
-				cond_wait(%PROGRESS); #release lock on %PROGRESS and wait until some other worker do some work
-			}
-		}	
-		{
-			lock(%PROGRESS);
-			$PROGRESS{$worker_name}++;
-			cond_broadcast(%PROGRESS);
-		}
-				
+	while (my $aref = $prep->fetchall_arrayref(undef, $BATCH_SIZE)) {
 
 		lock(%DIFFS);
 
@@ -1144,6 +1108,31 @@ sub FirstStageWorker {
 		PrintMsg( "[$worker_name] rows processed: $i; in sync: $in_sync_counter, ",
 			  "out of: $out_of_sync_counter, missing in other db: $thisdb_only_counter, ",
 			  "summary out of sync: $OUTOFSYNCCOUNTER \n")  if ($DEBUG>1);
+		
+		#this is end of single batch processing
+		#synchronize all workers here, comparing speed is as fast as the slowest worker
+		{ 
+			lock(%FIRST_STAGE_BATCH_PROGRESS);
+
+			$FIRST_STAGE_BATCH_PROGRESS{$worker_name}++; #we finished our batch here, increment the counter
+
+			my $p = $FIRST_STAGE_BATCH_PROGRESS{$worker_name};
+
+			while (1) {
+				my $in_sync = 1;
+
+				#check what progress is for other stages
+				foreach my $k (keys %FIRST_STAGE_BATCH_PROGRESS) { 
+					$in_sync = 0 if ($FIRST_STAGE_BATCH_PROGRESS{$k} != $p);
+				}
+
+				#wait for others
+				cond_wait(%FIRST_STAGE_BATCH_PROGRESS) until ($in_sync); 
+			}
+			$FIRST_STAGE_BATCH_PROGRESS = 0;
+		}
+
+
 	}
 
 	$prep->finish;
@@ -1172,6 +1161,10 @@ sub RunFirstStageWorkers {
 		$args_ref->{$w}->{dbname} = $w;
 		$WORKERS[$i] = threads->create(\&FirstStageWorker, $args_ref->{$w}, $args_ref->{settings});
 		$WORKERS[$i]->detach();
+		{
+			lock(%FIRST_STAGE_BATCH_PROGRESS);
+			$FIRST_STAGE_BATCH_PROGRESS{$w} = 0;
+		}
 		$i++;
 	}
 
