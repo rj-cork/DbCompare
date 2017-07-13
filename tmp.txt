@@ -10,7 +10,7 @@
   6) no db load limit
   7) skip errors
   8) skip no pk/uk tables
-  9) limit na ilosc roznic 50 000
+  9) limit na ilosc roznic 50 000, powyzej tego nie robi second stage
 
 
 - output do 1 pliku, diffy do katalogu w formacie 
