@@ -907,6 +907,9 @@ my $SECONDSTAGESLEEP = 30; #wait 30 seconds between each 2nd stage lookup pass
 my $SECONDSTAGETRIES = 5; #how many 2nd stage lookup passes
 my $FIRST_STAGE_RUNNING :shared;
 my %COLUMNS :shared; #store information about table columns, shared across all workers
+my %DIFFS :shared;
+my %DIFFS_TRANSLATED :shared; #$d dbname, $t column type, $
+			      #for pk_transformation='sprintf("%-$1s",$v) if ($d eq 'DBSAC' and $t =~ /CHAR\((\d+)\)/)'
 my $BATCH_SIZE = 10000; #how many rows to process at once
 my $MAX_DIFFS = $BATCH_SIZE*10; #maximum out of sync recorded records. it is sefety limit
 				#so the script will not allocate whole memory if
@@ -1209,7 +1212,7 @@ sub CoordinatorProcess { #we are forked process that is supposed to compare give
 		#			primary => ..., which database is primary
                        #                 compare_col => ....,
                         #                compare_hash => sha1
-                         #               pk_transformation => 'sub { .... } returns' ??? (w DIFFS dla kazdego klucza zmodyfikowanego powinien byc zapisany w %PK_ORIGINALS oryginalne wartosci dla porownywarki w stage 2
+                         #               pk_transformation => 'sprintf("%-$1s",$v) if (/CHAR\((\d+)\)/)'  (w DIFFS dla kazdego klucza zmodyfikowanego powinien byc zapisany w %PK_ORIGINALS oryginalne wartosci dla porownywarki w stage 2
                           #              select_concurency => 1
                            #             stage2_rounds => 5,
                            #             stage2_sleep => 30,
@@ -1229,6 +1232,9 @@ sub CoordinatorProcess { #we are forked process that is supposed to compare give
         RunFirstStageWorkers(); #proceed with table comparision, 1 thread per database connection
 
 	FirstStageFinalCheck();
+
+	$SECONDSTAGETRIES = $args_ref->{settings}->{stage2_rounds} if (defined($args_ref->{settings}->{stage2_rounds}));
+	$SECONDSTAGESLEEP = $args_ref->{settings}->{stage2_sleep} if (defined($args_ref->{settings}->{stage2_sleep}));
 
 	for ($i=0;$i<$SECONDSTAGETRIES;$i++) {
 		sleep($SECONDSTAGESLEEP) if($i);
