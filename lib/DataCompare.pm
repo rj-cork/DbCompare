@@ -907,8 +907,11 @@ my $SECONDSTAGESLEEP = 30; #wait 30 seconds between each 2nd stage lookup pass
 my $SECONDSTAGETRIES = 5; #how many 2nd stage lookup passes
 my $FIRST_STAGE_RUNNING :shared;
 my %COLUMNS :shared; #store information about table columns, shared across all workers
-my %DIFFS :shared;
-my %DIFFS_TRANSLATED :shared; #$d dbname, $t column type, $
+my %DIFFS :shared;	#key is 'pk_col1|pk_col2|pk_col3' val is compared column or hash or 1
+my %DIFFS_ORIGINAL :shared; #for 2nd stage lookups we need to decompose hash key to table pk which can be problematic
+			    #in case '|' contained in any pk column. Thats why we need to keep original pk column values
+				#
+				#$d dbname, $t column type, $v value, $c column name
 			      #for pk_transformation='sprintf("%-$1s",$v) if ($d eq 'DBSAC' and $t =~ /CHAR\((\d+)\)/)'
 my $BATCH_SIZE = 10000; #how many rows to process at once
 my $MAX_DIFFS = $BATCH_SIZE*10; #maximum out of sync recorded records. it is sefety limit
@@ -1052,8 +1055,11 @@ sub FirstStageWorker {
 		return -1;
 	}
 
+	my @column_names = @{$prep->{NAME}}; #names for selected columns
+
 	my ($val,$key,$record_no,$total_out_of_sync);
-	while (my $aref = $prep->fetchall_arrayref(undef, $BATCH_SIZE)) {
+	while (my $aref = $prep->fetchall_arrayref({}, $BATCH_SIZE)) {
+	#while (my $aref = $prep->fetchall_arrayref(undef, $BATCH_SIZE)) {
 
 		{ #%DIFFS lock
 			lock(%DIFFS);
@@ -1066,9 +1072,15 @@ sub FirstStageWorker {
 		
 			#for each record stored in $rref
 			while (my $rref = shift(@{$aref})) {
+				#value column is 'CMP#VALUE'
+				#rest of columns is pk key
+				my @cols = @{$rref}; #values to be stored as originals
 
 				$val = pop @{$rref}; #last column in row is value
 				$key = join('|',@{$rref}); #first columns (except the last one) are key
+
+				$DIFFS_ORIGINAL{$k}->{$key} = \@cols;
+
 				Logger::PrintMsg(Logger::DEBUG2, $worker_name, " key: [$key] value: $val");
 	
 				my $thesame = 1;
