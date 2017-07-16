@@ -33,6 +33,7 @@ use Carp;# qw(cluck longmess shortmess);
 
 use constant ERROR => -2;
 use constant WARNING => -1;
+use constant INFO => 0;
 use constant DEBUG => 1;
 use constant DEBUG1 => 1;
 use constant DEBUG2 => 2;

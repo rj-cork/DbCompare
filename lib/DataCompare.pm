@@ -951,6 +951,37 @@ sub SetProcessName {
 	$0 = $new_name;
 }
 
+	# This one changes VARCHAR values to CHAR values (padded with spaces)
+	# $code = 'return sprintf("%-$1s",$v) if ($t =~ /VARCHAR\((\d+)\)/)';
+sub ColumnTransformation {
+	my $column_names_ref = shift;
+	my $column_values_ref = shift;
+	my $column_definitions_ref = shift;
+	my $code = shift;
+	my @ret;
+
+	#we will predefine variables in 'global' scope like $a and $b for sort function
+	my $v;  #for value
+	my $c;  #column name
+	my $t;  #column type
+	for (my $i=0;$i<scalar(@{$column_values_ref});$i++) {
+		$c = $column_names_ref->[$i];
+		$v = $column_values_ref->[$i];
+		$t = $column_definitions_ref->{$c}->{DATA_TYPE};
+		$_ = $t;
+
+		my $o = eval $code;
+		Logger::Terminate("Errors in '$code': $@") if ($@);
+
+		if ($o) {
+			push @ret, $o;
+		} else {
+			push @ret, $v;
+		}
+	}
+
+}
+
 use constant COMPARE_USING_COLUMN = 2;
 use constant COMPARE_USING_SHA1 = 1;
 use constant COMPARE_USING_PK = 0;
@@ -1058,8 +1089,7 @@ sub FirstStageWorker {
 	my @column_names = @{$prep->{NAME}}; #names for selected columns
 
 	my ($val,$key,$record_no,$total_out_of_sync);
-	while (my $aref = $prep->fetchall_arrayref({}, $BATCH_SIZE)) {
-	#while (my $aref = $prep->fetchall_arrayref(undef, $BATCH_SIZE)) {
+	while (my $aref = $prep->fetchall_arrayref(undef, $BATCH_SIZE)) {
 
 		{ #%DIFFS lock
 			lock(%DIFFS);
@@ -1072,14 +1102,24 @@ sub FirstStageWorker {
 		
 			#for each record stored in $rref
 			while (my $rref = shift(@{$aref})) {
+				my @cols :shared;
+
+				if (defined($global_settings->{column_transormation})) {
+					@cols = ColumnTransformation(\@column_names, #names of selected columns
+									$rref, #values for selected columns
+									\%COLUMNS, #column definitions for processed table
+									$global_settings->{column_transormation}); #transformation code
+				} else {
+					@cols = @{$rref};
+				} 
+
 				#value column is 'CMP#VALUE'
 				#rest of columns is pk key
-				my @cols = @{$rref}; #values to be stored as originals
+				$val = pop @cols; #last column in row is value
+				$key = join('|',@cols); #first columns (except the last one) are key
 
-				$val = pop @{$rref}; #last column in row is value
-				$key = join('|',@{$rref}); #first columns (except the last one) are key
-
-				$DIFFS_ORIGINAL{$k}->{$key} = \@cols;
+				@cols = @{$rref}; #values to be stored as originals
+				$DIFFS_ORIGINAL{$worker_name}->{$key} = \@cols;
 
 				Logger::PrintMsg(Logger::DEBUG2, $worker_name, " key: [$key] value: $val");
 	
@@ -1104,6 +1144,7 @@ sub FirstStageWorker {
 					#records are the same - we can remove it from all hashes and increase the counter
 					foreach my $k (@dbs4comparison) {
 						delete ($DIFFS{$k}->{$key});
+						delete ($DIFFS_ORIGINAL{$k}->{$key});
 					}
 					$in_sync_counter++; #we just checked record synced across all databases
 				} else { #there are some differences for this record (missing or different value)
@@ -1180,6 +1221,50 @@ sub FirstStageWorker {
 	}
 }
 
+#TODO: is it necessary at all?
+sub FirstStageFinalCheck {
+
+	my $missingsomewhere=0;
+	my $outofsync=0;
+
+	lock(%DIFFS); #shouldnt be needed
+
+	foreach my $w (sort keys(%DIFFS)) { #for each worker/database stored in %DIFFS
+		
+		my @dbs4comparison = grep {$_ ne $w} keys %DIFFS; #list of databases/workers != this one
+		my $in_sync_counter=0; #should be 0, because they should be cleared by workers 
+		my $out_of_sync_counter=0;
+		my $thisdb_only_counter=0;
+
+		foreach my $k (keys %{$DIFFS{$w}}) { #each key left in DIFFS hash for given worker
+
+			my $match = 1;
+			foreach my $odb (@dbs4comparison) { #check whats inside others workers' hashes
+				
+				if ( defined($DIFFS{$odb}->{$k}) ) { #there is matching key stored in some other DB
+					if ($DIFFS{$odb}->{$k} ne $DIFFS{$w}->{$k} ) { #key exists but value differs
+						$match = 0;
+						$out_of_sync_counter++;
+						last;
+					}
+				} else {
+					$match = 0;
+					$thisdb_only_counter++;
+					last;
+				}
+			}
+			$in_sync_counter++ if($match);
+		}
+		$outofsync += $out_of_sync_counter;
+		$missingsomewhere += $thisdb_only_counter;
+		# there should be no $in_sync_counter left in DIFFS hashes
+		Logger::PrintMsg(Logger::DEBUG, $worker_name, "out of sync: $out_of_sync_counter, missing in other DBs: $thisdb_only_counter/db count, bad: $in_sync_counter");
+	}
+
+	Logger::PrintMsg(Logger::INFO, $worker_name, "FirstStageWorker finished: different values: $outofsync, missing somewhere: $missingsomewhere");
+	return $outofsync+$missingsomewhere;
+}
+
 sub RunFirstStageWorkers {
 	my $args_ref = shift;
 	my @WORKERS;
@@ -1224,7 +1309,7 @@ sub CoordinatorProcess { #we are forked process that is supposed to compare give
 		#			primary => ..., which database is primary
                        #                 compare_col => ....,
                         #                compare_hash => sha1
-                         #               pk_transformation => 'sprintf("%-$1s",$v) if (/CHAR\((\d+)\)/)'  (w DIFFS dla kazdego klucza zmodyfikowanego powinien byc zapisany w %PK_ORIGINALS oryginalne wartosci dla porownywarki w stage 2
+                         #               column_transformation => 'sprintf("%-$1s",$v) if (/CHAR\((\d+)\)/)'  (w DIFFS dla kazdego klucza zmodyfikowanego powinien byc zapisany w %PK_ORIGINALS oryginalne wartosci dla porownywarki w stage 2
                           #              select_concurency => 1
                            #             stage2_rounds => 5,
                            #             stage2_sleep => 30,
@@ -1243,15 +1328,16 @@ sub CoordinatorProcess { #we are forked process that is supposed to compare give
 
         RunFirstStageWorkers(); #proceed with table comparision, 1 thread per database connection
 
-	FirstStageFinalCheck();
+	if (FirstStageFinalCheck() > 0) {
 
-	$SECONDSTAGETRIES = $args_ref->{settings}->{stage2_rounds} if (defined($args_ref->{settings}->{stage2_rounds}));
-	$SECONDSTAGESLEEP = $args_ref->{settings}->{stage2_sleep} if (defined($args_ref->{settings}->{stage2_sleep}));
+		$SECONDSTAGETRIES = $args_ref->{settings}->{stage2_rounds} if (defined($args_ref->{settings}->{stage2_rounds}));
+		$SECONDSTAGESLEEP = $args_ref->{settings}->{stage2_sleep} if (defined($args_ref->{settings}->{stage2_sleep}));
 
-	for ($i=0;$i<$SECONDSTAGETRIES;$i++) {
-		sleep($SECONDSTAGESLEEP) if($i);
-		Logger::PrintMsg("SecondStage...");
-		last if (SecondStageLookup() == 0); #all is in sync, no need for more checking
+		for ($i=0;$i<$SECONDSTAGETRIES;$i++) {
+			sleep($SECONDSTAGESLEEP) if($i);
+			Logger::PrintMsg("SecondStage...");
+			last if (SecondStageLookup() == 0); #all is in sync, no need for more checking
+		}
 	}
 
 	FinalResults();	
