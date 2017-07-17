@@ -1286,10 +1286,115 @@ sub RunFirstStageWorkers {
 		sleep 1;
 	}
 
-	Logger::Terminate("FIRST_STAGE_RUNNING: $FIRST_STAGE_RUNNING" if ($FIRST_STAGE_RUNNING < 0);
+	Logger::Terminate("FIRST_STAGE_RUNNING: $FIRST_STAGE_RUNNING") if ($FIRST_STAGE_RUNNING < 0);
 			#RUNNING>0, workers are processing
 			#RUNNING==0, workers have finished
 			#RUNNING<0, error condition, exit immediately
+}
+
+sub SecondStagePrepare {
+        my $args_ref = shift;
+	my %dbhs;
+
+        my $i = 0;
+        foreach my $worker_name (sort keys %{$args_ref->{datasources}}) {
+		my $dbh = Database::Connect($data_source->{connection}, $worker_name);
+
+		if (not defined($dbh)) {
+			Logger::Terminate("Not connected");
+			return -1;
+		}
+		$dbhs{$worker_name} = $dbh;
+        }
+
+	return \%dbhs;
+}
+
+sub SecondStageLookup {
+	my $dbhs_ref = shift;
+	my $synced=0;
+	my $outofsync=0;
+	my $deleted=0;
+	my $k;
+
+	lock(%DIFFS); #shouldnt be needed - no threads here
+
+	my %prep_sqls;
+# 1) connect to database again and create list of unique keys/PKs stored by all workers (out of sync records)
+	my %unique_keys;
+	foreach my $worker_name (keys(%DIFFS)) { #for each worker/database stored in %DIFFS
+
+		if (not defined($dbhs->{$worker_name})) {
+			Logger::Terminate("No such worker");
+			return -1;
+		}
+
+		foreach $k (keys %{$DIFFS{$worker_name}}) { #each key left in DIFFS hash for given worker
+			$unique_keys{$k} = 0 if (not defined($unique_keys{$k}));
+			$unique_keys{$k}++;
+		}
+
+		#prepare sqls
+		$prep_sqls{$w} = SecondStagePrepSql($dbhs->{$worker_name}, $worker_name);
+		Logger::Terminate("Not prepared") if (not defined($prep_sqls{$worker_name})); #error on DBI prep
+	}
+
+# 2) for each PK check current value in all databases
+	foreach $k (keys(%unique_keys)) { #for each key found in any database/worker output
+		my $exists = 0;
+
+		foreach $w (keys %DIFFS) { #check all databases/workers output
+			my $newval = SecondStageGetRow($prep_sqls{$w}, $k, $w);
+			return -1 if (not defined($newval) and $RUNNING<0); #error on DBI prep
+
+			if (not defined($newval)) { #row with that key is missing in that DB
+				if (defined($DIFFS{$w}->{$k})) { #but it was recorded before
+					delete $DIFFS{$w}->{$k}; # update new value -> delete
+				}
+			} else {
+				$DIFFS{$w}->{$k} = $newval; #add or update
+				$exists = 1;
+			}
+		}
+
+# 3) if SHA1 or timestamp column is the same then remove from all DIFF hashes
+		my $val;
+		my $match = 1;
+		if ($exists == 0) { # key $k no longer exists in any database
+			$deleted++; #increment counter
+		} else {
+			foreach $w (keys %DIFFS) { #check all databases/workers output
+				if (defined($DIFFS{$w}->{$k})) { #there is matching key 
+					if (not defined($val)) {
+						$val = $DIFFS{$w}->{$k};
+					} 
+					if ($DIFFS{$w}->{$k} ne $val) { #key exists and the value is not the same
+						$match=0;
+						last;
+					}
+				} else {
+					$match=0;
+					last;
+				}
+			}
+		}
+
+		if ($match) { #everywhere is the same
+			foreach $w (sort keys %DIFFS) {
+				delete $DIFFS{$w}->{$k}; # delete this key, it is in sync everywhere
+			}
+			$synced++;
+		} else {
+			$outofsync++;
+		}
+	}
+
+	PrintMsg("SecondStageLookup: $synced synced, $deleted deleted, $outofsync out of sync\n");
+	foreach my $p (keys %prep_sqls) {
+		$prep_sqls{$p}->finish;
+		$dbhs{$p}->disconnect();
+	}
+	return $outofsync;
 }
 
 sub CoordinatorProcess { #we are forked process that is supposed to compare given table or partition
@@ -1326,17 +1431,18 @@ sub CoordinatorProcess { #we are forked process that is supposed to compare give
 
 	Logger::PrintMsg(PROCESS_NAME," started at ", POSIX::strftime('%y/%m/%d %H:%M:%S', localtime));
 
-        RunFirstStageWorkers(); #proceed with table comparision, 1 thread per database connection
+        RunFirstStageWorkers($args_ref); #proceed with table comparision, 1 thread per database connection
 
 	if (FirstStageFinalCheck() > 0) {
 
 		$SECONDSTAGETRIES = $args_ref->{settings}->{stage2_rounds} if (defined($args_ref->{settings}->{stage2_rounds}));
 		$SECONDSTAGESLEEP = $args_ref->{settings}->{stage2_sleep} if (defined($args_ref->{settings}->{stage2_sleep}));
-
+		
+		my $dbhs = SecondStagePrepare($args_ref);
 		for ($i=0;$i<$SECONDSTAGETRIES;$i++) {
 			sleep($SECONDSTAGESLEEP) if($i);
 			Logger::PrintMsg("SecondStage...");
-			last if (SecondStageLookup() == 0); #all is in sync, no need for more checking
+			last if (SecondStageLookup($dbhs) == 0); #all is in sync, no need for more checking
 		}
 	}
 

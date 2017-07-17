@@ -329,7 +329,47 @@ sub PrepareFirstStageSelect {
 	return $sql;
 }
 
+sub PrepareSecondStageSelect {
+	my $object = shift;
+	my $columns = shift;
+	my $cmp_method = shift;
+	my $settings = shift;
 
+	my $tablename = $object->{table};
+        my $schema = $object->{owner};
+	my $partition = '';
+	my $range = '';
+
+	$partition = $object->{partition_name} if (defined($object->{partition_name}));
+	$partition = $object->{partition_for} if (defined($object->{partition_for}));
+	$range = $object->{pk_range} if (defined($object->{pk_range}));
+
+	my $sql = 'SELECT ';
+
+	#get pk columns
+	my @pk = sort { $columns{$a}->{CPOSITON} <=> $columns{$b}->{CPOSITON} } grep {defined $columns{$_}->{CPOSITON}} keys %{$columns};
+
+
+        if ($cmp_method == COMPARE_USING_COLUMN) {
+	if (defined($CMP_COLUMN)) { #TODO: is limiter needed? access is by pk
+		$sql = 'SELECT '.$CMP_COLUMN." FROM $tablename WHERE ".join(" and ", map { "$_=?" } @PK_COLUMNS ).' AND '.$LIMITER;
+	} elsif ($CMP_KEY_ONLY) {
+		$sql = "SELECT 'exists' FROM $tablename WHERE ".join(" and ", map { "$_=?" } @PK_COLUMNS ).' AND '.$LIMITER;
+	} else {
+		$sql = SHA1Sql(@PK_COLUMNS).$tablename.' WHERE '.join(" and ", map { "$_=?" } @PK_COLUMNS );
+	}
+
+	PrintMsg( "[$dbname] $sql\n") if ($DEBUG>1);
+
+	my $prep = $dbh->prepare($sql);
+	if($dbh->err) { 
+		$RUNNING = -111;
+		PrintMsg( "[$dbname] ERROR: $DBI::errstr for [$sql]\n");
+		die; #no threads here, we can die
+	}
+
+	return $prep;
+}
 
 sub SessionSetup {
 	my $dbh = shift;
