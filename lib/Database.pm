@@ -351,7 +351,6 @@ sub PrepareSecondStageSelect {
 
 
         if ($cmp_method == COMPARE_USING_COLUMN) {
-	if (defined($CMP_COLUMN)) { #TODO: is limiter needed? access is by pk
 		$sql = 'SELECT '.$CMP_COLUMN." FROM $tablename WHERE ".join(" and ", map { "$_=?" } @PK_COLUMNS ).' AND '.$LIMITER;
 	} elsif ($CMP_KEY_ONLY) {
 		$sql = "SELECT 'exists' FROM $tablename WHERE ".join(" and ", map { "$_=?" } @PK_COLUMNS ).' AND '.$LIMITER;
@@ -359,6 +358,7 @@ sub PrepareSecondStageSelect {
 		$sql = SHA1Sql(@PK_COLUMNS).$tablename.' WHERE '.join(" and ", map { "$_=?" } @PK_COLUMNS );
 	}
 
+	$sql .= " CMP#VALUE FROM $schema.$tablename $partition WHERE $range ORDER BY ".join(',', @pk);
 	PrintMsg( "[$dbname] $sql\n") if ($DEBUG>1);
 
 	my $prep = $dbh->prepare($sql);
