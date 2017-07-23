@@ -952,18 +952,20 @@ sub SetProcessName {
 }
 
 	# This one changes VARCHAR values to CHAR values (padded with spaces)
-	# $code = 'return sprintf("%-$1s",$v) if ($t =~ /VARCHAR\((\d+)\)/)';
+	# $code = 'return sprintf("%-$1s",$v) if ($t =~ /VARCHAR\((\d+)\) && $d =~ /SAC/)';
 sub ColumnTransformation {
 	my $column_names_ref = shift;
 	my $column_values_ref = shift;
 	my $column_definitions_ref = shift;
 	my $code = shift;
+	my $worker_name = shift;
 	my @ret;
 
 	#we will predefine variables in 'global' scope like $a and $b for sort function
 	my $v;  #for value
 	my $c;  #column name
 	my $t;  #column type
+	my $d = $worker_name;  #worker name / database alias
 	for (my $i=0;$i<scalar(@{$column_values_ref});$i++) {
 		$c = $column_names_ref->[$i];
 		$v = $column_values_ref->[$i];
@@ -1108,7 +1110,8 @@ sub FirstStageWorker {
 					@cols = ColumnTransformation(\@column_names, #names of selected columns
 									$rref, #values for selected columns
 									\%COLUMNS, #column definitions for processed table
-									$global_settings->{column_transormation}); #transformation code
+									$global_settings->{column_transormation}, #transformation code
+									$worker_name); #
 				} else {
 					@cols = @{$rref};
 				} 
@@ -1315,44 +1318,72 @@ sub SecondStageLookup {
 	my $synced=0;
 	my $outofsync=0;
 	my $deleted=0;
-	my $k;
+	my $key;
+	my $worker_name;
 
 	lock(%DIFFS); #shouldnt be needed - no threads here
 
 	my %prep_sqls;
 # 1) connect to database again and create list of unique keys/PKs stored by all workers (out of sync records)
 	my %unique_keys;
-	foreach my $worker_name (keys(%DIFFS)) { #for each worker/database stored in %DIFFS
+	foreach $worker_name (keys(%DIFFS)) { #for each worker/database stored in %DIFFS
 
 		if (not defined($dbhs->{$worker_name})) {
 			Logger::Terminate("No such worker");
 			return -1;
 		}
 
-		foreach $k (keys %{$DIFFS{$worker_name}}) { #each key left in DIFFS hash for given worker
-			$unique_keys{$k} = 0 if (not defined($unique_keys{$k}));
-			$unique_keys{$k}++;
+		foreach $key (keys %{$DIFFS{$worker_name}}) { #each key left in DIFFS hash for given worker
+			$unique_keys{$key} = 0 if (not defined($unique_keys{$key}));
+			$unique_keys{$key}++;
 		}
 
 		#prepare sqls
-		$prep_sqls{$w} = SecondStagePrepSql($dbhs->{$worker_name}, $worker_name);
+		$prep_sqls{$worker_name} = SecondStagePrepSql($dbhs->{$worker_name}, $worker_name);
 		Logger::Terminate("Not prepared") if (not defined($prep_sqls{$worker_name})); #error on DBI prep
 	}
 
 # 2) for each PK check current value in all databases
-	foreach $k (keys(%unique_keys)) { #for each key found in any database/worker output
+	foreach $key (keys(%unique_keys)) { #for each key found in any database/worker output
 		my $exists = 0;
 
-		foreach $w (keys %DIFFS) { #check all databases/workers output
-			my $newval = SecondStageGetRow($prep_sqls{$w}, $k, $w);
-			return -1 if (not defined($newval) and $RUNNING<0); #error on DBI prep
+		foreach $worker_name (keys %DIFFS) { #check all databases/workers output
 
-			if (not defined($newval)) { #row with that key is missing in that DB
-				if (defined($DIFFS{$w}->{$k})) { #but it was recorded before
-					delete $DIFFS{$w}->{$k}; # update new value -> delete
+			my $orig_key = $DIFFS_ORIGINAL{$worker_name}->{$key}; #get array ref for pk cols + value
+
+					#fetch from database value for original pk/uk 
+			my $newval = SecondStageGetRow($prep_sqls{$worker_name}, $orig_key, $worker_name);
+
+			return -1 if (not defined($newval) and $FIRST_STAGE_RUNNING<0); #error on DBI prep
+								#TODO terminate?
+
+			if (not defined($newval)) { #row with currently checked key is missing in processed DB ($worker_name)
+				if (defined($DIFFS{$worker_name}->{$key})) { #but it was recorded before
+					delete $DIFFS{$worker_name}->{$key}; #update current state and delete key
+					delete $DIFFS_ORIGINAL{$worker_name}->{$key}; #delete original key values for the database/key
 				}
 			} else {
-				$DIFFS{$w}->{$k} = $newval; #add or update
+				$DIFFS{$worker_name}->{$key} = $newval; #add or update
+##############
+				if (defined($global_settings->{column_transormation})) {
+					@cols = ColumnTransformation(\@column_names, #names of selected columns
+									$rref, #values for selected columns
+									\%COLUMNS, #column definitions for processed table
+									$global_settings->{column_transormation}); #transformation code
+				} else {
+					@cols = @{$rref};
+				} 
+
+				#value column is 'CMP#VALUE'
+				#rest of columns is pk key
+				$val = pop @cols; #last column in row is value
+				$key = join('|',@cols); #first columns (except the last one) are key
+
+				@cols = @{$rref}; #values to be stored as originals
+				$DIFFS_ORIGINAL{$worker_name}->{$key} = \@cols;
+
+				Logger::PrintMsg(Logger::DEBUG2, $worker_name, " key: [$key] value: $val");
+######################3
 				$exists = 1;
 			}
 		}
