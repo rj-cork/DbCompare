@@ -1413,7 +1413,7 @@ sub SecondStageLookup {
 					@cols = ColumnTransformation(\@column_names, #names of selected columns
 									$rref, #values for selected columns
 									\%COLUMNS, #column definitions for processed table
-									$global_settings->{column_transormation}); #transformation code
+									$global_settings->{transform_func}); #transformation code
 				} else {
 					@cols = @{$rref};
 				} 
@@ -1517,7 +1517,8 @@ sub CoordinatorProcess { #we are forked process that is supposed to compare give
 		#			primary => ..., which database is primary
                        #                 compare_col => ....,
                         #                compare_hash => sha1
-                         #               column_transformation => 'sprintf("%-$1s",$v) if (/CHAR\((\d+)\)/)'  (w DIFFS dla kazdego klucza zmodyfikowanego powinien byc zapisany w %PK_ORIGINALS oryginalne wartosci dla porownywarki w stage 2
+                         #               transform_func => 'rtrim($v) if (/CHAR\((\d+)\)/)'  (w DIFFS dla kazdego klucza zmodyfikowanego powinien byc zapisany w %PK_ORIGINALS oryginalne wartosci dla porownywarki w stage 2
+                         #               transform_func_inv => 'rpad($v, $1) if (/CHAR\((\d+)\)/)'  (w DIFFS dla kazdego klucza zmodyfikowanego powinien byc zapisany w %PK_ORIGINALS oryginalne wartosci dla porownywarki w stage 2
                           #              select_concurency => 1
                            #             stage2_rounds => 5,
                            #             stage2_sleep => 30,
