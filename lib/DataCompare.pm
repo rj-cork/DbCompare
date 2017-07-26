@@ -922,6 +922,37 @@ my $WORKER_THREADS_COUNT; #number of workers/datasources
 
 use constant PROCESS_NAME = 'DataCompare';
 
+sub rtrim {
+	my $a = shift;
+	if ($a) {
+		$a =~ s/\s+$//;
+	}
+	return $a;
+}
+
+sub ltrim {
+	my $a = shift;
+	if ($a) {
+		$a=~s/^\s+//;
+	}
+	return $a;
+}
+
+sub trim {
+	return ltrim(rtrim(shift));
+}
+
+sub rpad {
+        my ($a,$num,$padding) = @_;
+
+	$padding = ' ' if (not $padding);
+
+        if ($a && $num) {
+		$a = sprintf("%-${num}s", $a);
+        }
+        return $a;
+}
+
 sub SetProcessName {
 	my $args_ref = shift;
 
@@ -1334,8 +1365,8 @@ sub SecondStageLookup {
 		}
 
 		foreach $key (keys %{$DIFFS{$worker_name}}) { #each key left in DIFFS hash for given worker
-			$unique_keys{$key} = 0 if (not defined($unique_keys{$key}));
-			$unique_keys{$key}++;
+			$unique_keys{$key} = $worker_name if (not defined($unique_keys{$key}));
+#			$unique_keys{$key}++;
 		}
 
 		#prepare sqls
@@ -1350,6 +1381,19 @@ sub SecondStageLookup {
 		foreach $worker_name (keys %DIFFS) { #check all databases/workers output
 
 			my $orig_key = $DIFFS_ORIGINAL{$worker_name}->{$key}; #get array ref for pk cols + value
+			#if record was missing for this worker then there will be no orig_key
+			#and we need to recreate it from key of worker that had this record and stored orig_key
+
+			if (not $orig_key) {
+#				$orig_key = $DIFFS_ORIGINAL{ $unique_keys{$key} }->{$key};
+#			ColumnTransformation(\@column_names, #names of selected columns
+   #                                                                     $rref, #values for selected columns
+  #                                                                      \%COLUMNS, #column definitions for processed table
+ #                                                                       $global_settings->{column_transormation}, #transformation code
+#                                                                        $worker_name); 
+				#DIFFS store already translated keys
+				$orig_key = $DIFFS{$unique_keys{$key}}->{$key};
+			}
 
 					#fetch from database value for original pk/uk 
 			my $newval = SecondStageGetRow($prep_sqls{$worker_name}, $orig_key, $worker_name);
@@ -1427,6 +1471,34 @@ sub SecondStageLookup {
 	}
 	return $outofsync;
 }
+
+
+# column_transformation
+# can be needed when one database has different column type in PK than the other. For example DB1 has CHAR(5) and DB2 has VARCHAR(5)
+# In such case 'str  ' in DB1 can be 'str' in DB2.
+# to allow PK comparison you need define function that will translate pk for DB1 to pk for DB2 
+# f(char) = varchar
+# g(varchar) = char
+# f(g(varchar)) =  varchar 
+# g(f(char)) = char
+
+# lets say f() is rtrim: 
+#	#$v is char(5)
+#	return rtrim($v) #now it is varchar(5)
+
+# lets say g() is rpad: 
+#	#$v is varchar(5)
+#	return rpad($v,5) #now it is char(5)
+
+# f('str  ') = 'str'
+# g(f('str  ')) = 'str  '
+# g('str') = 'str  '
+# f(g('str')) = 'str'
+
+# that function is needed to correlate pk on DB1 'str  ' with pk on DB2 'str'
+# that can be 
+#w first stage dajemy funkcje wprost i dane zrodla
+#w second stage dajemy funkcje odwrotna i dane celu
 
 sub CoordinatorProcess { #we are forked process that is supposed to compare given table or partition
 	my $out_pipe = shift; #this pipe is for sending output data to main process
