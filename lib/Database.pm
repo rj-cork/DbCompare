@@ -251,10 +251,10 @@ sub GetColumns {
 sub PrepareFirstStageSelect {
 	my $object = shift;
 	my $columns = shift;
-	my $cmp_method = shift;
 	my $settings = shift;
 
-	my $parallel = $global_settings->{select_concurency};
+	my $cmp_method = $settings->{cmp_method};
+	my $parallel = $settings->{select_concurency};
 	
 	#get pk columns
 	my @pk = sort { $columns{$a}->{CPOSITON} <=> $columns{$b}->{CPOSITON} } grep {defined $columns{$_}->{CPOSITON}} keys %{$columns};
@@ -332,9 +332,9 @@ sub PrepareFirstStageSelect {
 sub PrepareSecondStageSelect {
 	my $object = shift;
 	my $columns = shift;
-	my $cmp_method = shift;
 	my $settings = shift;
 
+	my $cmp_method = $settings->{cmp_method};
 	my $tablename = $object->{table};
         my $schema = $object->{owner};
 	my $partition = '';
@@ -368,7 +368,7 @@ sub PrepareSecondStageSelect {
 		die; #no threads here, we can die
 	}
 
-	return $prep;
+	return $sql;
 }
 
 sub SessionSetup {
