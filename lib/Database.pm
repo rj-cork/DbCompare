@@ -359,14 +359,6 @@ sub PrepareSecondStageSelect {
 	}
 
 	$sql .= " CMP#VALUE FROM $schema.$tablename $partition WHERE $range ORDER BY ".join(',', @pk);
-	PrintMsg( "[$dbname] $sql\n") if ($DEBUG>1);
-
-	my $prep = $dbh->prepare($sql);
-	if($dbh->err) { 
-		$RUNNING = -111;
-		PrintMsg( "[$dbname] ERROR: $DBI::errstr for [$sql]\n");
-		die; #no threads here, we can die
-	}
 
 	return $sql;
 }

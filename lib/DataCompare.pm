@@ -553,7 +553,7 @@ sub SecondStageLookup {
 		}
 
 		#prepare sqls
-		my $sql = PrepareSecondStageSelect($args_ref->{datasources}->{$worker_name}->{object}, 
+		my $sql = Database::PrepareSecondStageSelect($args_ref->{datasources}->{$worker_name}->{object}, 
 							\%COLUMNS, 
 							GetComparisonMethod($args_ref->{settings}));
 
@@ -666,56 +666,6 @@ sub SecondStageLookup {
 	return $outofsync;
 }
 
-@->
-sub FinalResults {
-
-	my ($k, $w);
-
-	lock(%DIFFS); #shouldnt be needed
-
-	my %unique_keys;
-	foreach $w (keys(%DIFFS)) { #for each worker/database stored in %DIFFS
-		foreach $k (keys %{$DIFFS{$w}}) { #each key left in DIFFS hash for given worker
-			$unique_keys{$k} = 0 if (not defined($unique_keys{$k}));
-			$unique_keys{$k}++;
-		}
-	}
-
-	my $in_sync_counter=0; #should be 0, because they should be cleared by workers or SecondStageLookup
-	my $out_of_sync_counter=0;
-
-	foreach $k (keys(%unique_keys)) { #for each key found in any database/worker output
-		
-		my $out_line="OUT OF SYNC [$k] ";
-		my $val;
-		my $match=1;
-		foreach $w (sort keys %DIFFS) { #check all databases/workers output
-			if ( defined($DIFFS{$w}->{$k}) ) { #there is matching key 
-				if (not defined($val)) {
-					$val = $DIFFS{$w}->{$k};
-				} 
-				$out_line .= " $w: ".$DIFFS{$w}->{$k};
-				if ($DIFFS{$w}->{$k} ne $val) { #key exists and the value is the same
-					$match=0;
-				}
-			} else {
-				$match=0;
-				$out_line .= " $w: missing ";
-			}
-		}
-
-		if ($match) {
-			$in_sync_counter++;
-		} else {
-			$out_of_sync_counter++;
-		}
-		PrintMsg("$out_line\n");
-
-	}
-
-	PrintMsg("FinalResults:  out of sync: $out_of_sync_counter, bad: $in_sync_counter\n");
-
-}
 
 # column_transformation
 # can be needed when one database has different column type in PK than the other. For example DB1 has CHAR(5) and DB2 has VARCHAR(5)
@@ -794,7 +744,7 @@ sub CoordinatorProcess { #we are forked process that is supposed to compare give
 		}
 	}
 
-	FinalResults();	
+	Logger::FinalResults();	
 
 	PrintMsg(PROCESS_NAME, " stopped at ", POSIX::strftime('%y/%m/%d %H:%M:%S', localtime),
 			" time taken ", strftime("%T",gmtime(time-$start_time)));
