@@ -23,6 +23,12 @@ export ORACLE_HOME=/u01/app/11.2.0.3/grid
 export LD_LIBRARY_PATH=$ORACLE_HOME/lib
 export PATH=/bin:/usr/bin
 
+ulimit -d 2048000 #data seg size 2G
+ulimit -u 500	#max user processes 
+ulimit -v 5000000 # virual memory 5G
+ulimit -t 10800 # max cpu time 3h
+
+
 
 cd $DIR || exit 1
 
