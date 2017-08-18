@@ -1449,8 +1449,8 @@ sub ProcessAllTables {
 						PrintMsg WARNING, "ProcessAllTables(): [$kid] purging pipe: $l\n";
 						$report = PopulateReport ($report, $l, $table_name, $table_list, $marker_tm);
 					}
-					close($pi);
 					$selector->remove($pi) or die "IO::Select->Remove: $!";
+					close($pi);
 				}
 
 				$table_name = undef;

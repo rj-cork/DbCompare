@@ -2,6 +2,10 @@ Revision history for DbCompare and DataCompare scripts
 
 DbCompare.pl
 
+	1.11
+		- fix ProcessAllTables in purging pipe after parent gets child pid from waitpid 
+			first remove handle from IO::Select and then close - was the other way around
+
 	1.10
 		- fix: multiple --table/--schema doesn't stack - GetAllTables()
 		- change $0 to scriptname, current table and comparing parameters
