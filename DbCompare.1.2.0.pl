@@ -126,11 +126,15 @@ sub GetParams {
 		exit 1;
 	}
 	
-	if ($PARALLEL > 16 || $PARALLEL < 1) {
+	if ($parallel > 16 || $parallel < 1) {
 		PrintMsg ERROR, "GetParams(): --parallel outside valid range 1 to 16.\n";
 		exit 1;
 	}
 
+	if ($parallel_sql > 24 || $parallel_sql < 1) {
+		PrintMsg ERROR, "GetParams(): --parallel outside valid range 1 to 24.\n";
+		exit 1;
+	}
 
 	if ($auxuser) {
 		if ($auxuser =~ /([\w\d]+)(?:\/([\w\d]+))?/) {
