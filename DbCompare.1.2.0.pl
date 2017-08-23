@@ -28,7 +28,7 @@ use File::Basename;
 use lib (dirname(Cwd::abs_path($0)).'/lib');
 use DataCompare;
 use Database;
-use Logger qw(ERROR WARNING DEBUG DEBUG1 DEBUG2 DEBUG3);
+use Logger qw(PrintMsg ERROR WARNING DEBUG DEBUG1 DEBUG2 DEBUG3);
 use Storable;
 use Data::Dumper;
 use Getopt::Long;
@@ -74,23 +74,17 @@ sub SetProcessName {
 sub GetParams {
 	my @dbs;
 	my $basedb;
-	my $auxuser;
-	my $auxpass;
+
+	my ($auxuser, $auxpass);
+	my ($parallel, $parallel_sql);
+	my ($restart, $debug_lvl, $dry_run, $state_file, $max_load, $pid_file, $log_path);
+
 	my @objects;
 	my @cmp_columns;
 	my @cmp_sha;
-	my $restart;
-	my $debug_lvl;
-	my $parallel;
-	my $parallel_sql;
 	my @mappings;
 	my @excludes;
 	my @time_ranges;
-	my $dry_run;
-	my $state_file;
-	my $max_load;
-	my $pid_file;
-	my $log_path;
 
 	my $help = 0;
 	my $i = 0;
@@ -122,17 +116,17 @@ sub GetParams {
         }
 
 	if (scalar(@dbs) < 2) {
-		PrintMsg ERROR, "GetParams(): At least 2 database connections are needed.\n";
+		PrintMsg(ERROR, "GetParams(): At least 2 database connections are needed.\n");
 		exit 1;
 	}
 	
 	if ($parallel > 16 || $parallel < 1) {
-		PrintMsg ERROR, "GetParams(): --parallel outside valid range 1 to 16.\n";
+		PrintMsg(ERROR, "GetParams(): --parallelism outside valid range 1 to 16.\n");
 		exit 1;
 	}
 
 	if ($parallel_sql > 24 || $parallel_sql < 1) {
-		PrintMsg ERROR, "GetParams(): --parallel outside valid range 1 to 24.\n";
+		PrintMsg(ERROR, "GetParams(): --sqlparallelism outside valid range 1 to 24.\n");
 		exit 1;
 	}
 
@@ -141,7 +135,7 @@ sub GetParams {
 			($auxuser,$auxpass) = ($1,$2);
 			$auxpass = DataCompare::GetPass("Password for $auxuser:") if (!$auxpass);
 		} else {
-			PrintMsg ERROR, "GetParams(): invalid --auxuser. Should be --auxuser=someuser/somepassword\n";
+			PrintMsg(ERROR, "GetParams(): invalid --auxuser. Should be --auxuser=someuser/somepassword\n");
 			exit 1;
 		}
 	}		
@@ -156,7 +150,7 @@ sub GetParams {
 			   #alias, user, pass, host, port, service
 			($db{'ALIAS'}, $db{'USER'}, $db{'PASS'}, $db{'HOST'}, $db{'PORT'}, $db{'SERVICE'}) = ($1, $2, $3, $4, $5, $6);
 		} else {
-			PrintMsg ERROR, "GetParams(): Connect string $d doesn't match the right format: [alias=]user[/pass]\@host[:port]/service\n";
+			PrintMsg(ERROR, "GetParams(): Connect string $d doesn't match the right format: [alias=]user[/pass]\@host[:port]/service\n");
 			exit 1;
 		}
 
