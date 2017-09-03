@@ -37,7 +37,8 @@ use POSIX qw(strftime :sys_wait_h :signal_h);
 use IO::Select;
 use IO::Handle;
 use IO::Pipe;
-
+i
+# lib ======================================================================================================
 #remove password from process arguments
 sub SetProcessName {
 	my @args = @_;
@@ -70,6 +71,248 @@ sub SetProcessName {
         }
         $0 = $new_name;
 }
+  
+#=== Time verification functions ===
+sub ResolveDay {
+	my $d = shift;
+	my @n = qw( Sunday Monday Tuesday Wednesday Thursday Friday Saturday );
+
+	if (length($d)<2) {
+		PrintMsg ERROR, "ResolveDay(): $d too short to recognize the day";
+		exit 1;
+	}
+
+	for (my $i=0;$i<7;$i++) {
+		return $i if ($n[$i] =~ /^$d/i);
+	}
+	
+	PrintMsg ERROR, "ResolveDay(): $d what day is that?";
+	exit 1;
+}
+
+sub ResolveHour {
+	my $t = shift;
+
+	if ($t =~/^(\d+)(:(\d+))?$/) {
+		my $h = $1;
+		my $m = (defined ($3)) ? $3 : 0;
+		if ($h<0 || $h>23) {
+			PrintMsg ERROR, "ResolveHour(): Invalid hour: $h";
+			exit 1;
+		}
+
+		if ($m<0 || $m>59) {
+			PrintMsg ERROR, "ResolveHour(): Invalid minute: $m";
+			exit 1;
+		}
+
+		return $h*60+$m;
+	} 
+
+	PrintMsg ERROR, "ResolveHour(): Invalid time given: $t";
+	exit 1;
+}
+# returns 1 if current time matches any given time range
+sub VerifyTime { 
+	my @ranges = @_;
+	my @lt = localtime(time);
+	my $day_match;
+	my $hour_match;
+
+	return 1 if (scalar(@ranges) == 0);
+
+	#  0    1    2     3     4    5     6     7     8
+        #($sec,$min,$hour,$mday,$mon,$year,$wday,$yday,$isdst)
+	foreach my $r (@ranges) {
+
+		$day_match = $hour_match = 0;
+
+		if ($r =~ /^\s*([a-z,\s\-]+)?\s*([0-9,:\-\s]+)?\s*$/i) { #get new time range
+			my $d = $1;
+			my $h = $2;
+			if (defined $d) { #check days part
+				foreach my $i (split(',',$d)) {
+					my ($r1,$r2);
+					PrintMsg(DEBUG2, "VerifyTime(): $i\n");
+					if ($i =~ /(\w+)\-(\w+)/) {
+						$r1 = ResolveDay($1);
+						$r2 = ResolveDay($2);
+						PrintMsg(DEBUG2, "VerifyTime(): Day: $r1 - $r2\n");
+					} elsif ($i =~ /(\w+)/) {
+						$r1 = $r2 = ResolveDay($1);
+						PrintMsg(DEBUG2, "VerifyTime(): Day: $r1\n");
+					} else {
+						PrintMsg(ERROR, "VerifyTime(): Error parsing days\n");
+						exit 1;
+					}
+					if ( $r1 > $r2 ) { # 1-0 (Mo-Sun); 5-2 (Fri-Tue)
+						if ( ($r2 >= $lt[6]) || ($r1 <= $lt[6]) ) {
+							$day_match = 10;
+							last;
+						}
+					} else { #1-5 (Mo-Fri); 0-3 (Sun-We)
+						if ( $r1 <= $lt[6] && $lt[6] <= $r2) { #day match - check hours now
+							$day_match = 10;
+							last;
+						}
+					}
+				}
+			} else {
+				$day_match = -10; #day range is not given - implicytly assume that day matched
+			}
+
+			if (defined $h) { #hours defined 
+				foreach my $j (split(',',$h)) { #19:30-21,22,23-5
+					my ($t1,$t2,$t3,$t4);
+                                        PrintMsg(DEBUG2, "VerifyTime(): $j\n");
+
+					if ($j =~ /^(\d+(?::\d+)?)\-(\d+(?::\d+)?)$/) {
+						($t3,$t4) = ($1,$2);
+						$t1 = ResolveHour($t3);
+						$t2 = ResolveHour($t4);
+					} elsif ($j =~ /^(\d+)(?::(\d+))?$/) {
+						($t3,$t4) = ($1,$2);
+						if (defined($t4)) {
+							$t1 = $t2 = ResolveHour("$t3:$t4");
+						} else {
+							$t1 = ResolveHour("$t3:00");
+							$t2 = ResolveHour("$t3:59");
+						}
+					} else {
+						PrintMsg(ERROR,  "VerifyTime(): Error parsing time: $j\n");
+					}
+
+					my $t = $lt[2]*60+$lt[1];
+					PrintMsg(DEBUG3,  "VerifyTime(): time ",int($t/60),":",$t%60,
+								", check in <",int($t1/60),":",$t1%60,
+								",",int($t2/60),":",$t2%60,">\n");
+
+					if ($t1 > $t2) { # 22-5
+					      if ( ($t1 <= $t) || ($t2 >= $t) ) {
+						 PrintMsg(DEBUG3,  "VerifyTime(): hour match\n");
+						 $hour_match = 10;
+						 last;
+					      }
+					} else { # 9-12 or 9-9
+					      if ( ($t1 <= $t) && ($t <= $t2) ) {
+						 PrintMsg(DEBUG3,  "VerifyTime(): hour match\n");
+						 $hour_match = 10;
+						 last;
+					      }
+					}
+				}
+			} else {
+				$hour_match = -10; #hour is not given - implicytly assume that hour matched
+			}
+
+			if ($hour_match == -10 && $day_match == -10) {
+				PrintMsg(ERROR,  "VerifyTime(): Invalid time range: $r\n");
+			} elsif ($hour_match == 0 || $day_match == 0) {
+				PrintMsg(DEBUG1,  "VerifyTime(): didn't match $r\n");
+			} else {
+				PrintMsg(DEBUG2, 'VerifyTime(): Current ', strftime("%A %H:%M",@lt), " matched range: $r\n");
+				return 1;
+			}
+
+		} else {
+			PrintMsg(ERROR, "VerifyTime(): --range wrong format\n");
+			exit 1;
+		}
+	}
+	return 0;
+}
+
+#=== State saving functions ===
+sub LoadStateFile {
+        my $f = shift;
+	my $dbs = shift;
+	my %state_file;
+
+        return if(!defined $f);
+
+        if ( -f $f && -R $f ) { 
+                %state_file = %{retrieve($f)} or do { PrintMsg(ERROR, "LoadStateFile(): Error reading state file $f: $!\n"); exit 1; }
+        } else {
+		if (-e $f) { # and the file exists
+	                PrintMsg(ERROR, "LoadStateFile(): File $f is not a regular or readable file.\n");
+			exit 1;
+		} 
+		return (undef, undef); #new file needs to be created
+        }
+
+	if (!defined($state_file{TABLES})) {
+		PrintMsg(ERROR, "LoadStateFile(): invalid state file.\n");
+		exit 1;
+	}
+
+	foreach my $db (keys %{$dbs}) {
+		if (!defined($state_file{TABLES}->{$db})) {
+			PrintMsg(ERROR, "LoadStateFile(): Invalid state file. Missing tables for $db.\n");
+			exit 1;
+		}
+	}
+	
+	return ($state_file{TABLES}, $state_file{REPORT});
+}
+
+# filename, tables hash = null if remove file
+sub SaveStateFile {
+	my %sav;
+
+        my $f = shift;
+	$sav{'TABLES'} = shift;
+	$sav{'REPORT'} = shift;
+
+        return if(!defined $f);
+
+	PrintMsg(DEBUG, "SaveStateFile(): Saving state in $f\n");
+        
+        if ( ! -e $f || ( -f $f && -W $f ) ) { 
+		if ($sav{'TABLES'}) { # 2nd arg is undef if there is no tables left to process
+	                store \%sav, $f or do { PrintMsg(ERROR,  "SaveStateFile(): Error writing current state to file $f: $!\n"); exit 1; }
+		} else { #nothing left to do, we dont need state file any more
+			unlink $f or PrintMsg(ERROR,  "SaveStateFile(): Cannot remove state file $f: $!\n");
+		}
+        } else {
+                PrintMsg(ERROR, "SaveStateFile(): File $f is not a regular or writeable file.\n");
+		exit 1;
+        }
+}
+# ============================
+
+sub CreatePidfile {
+	my $pid_file = shift;
+	my $PF;
+
+        return if(!defined $pid_file);
+        
+        if ( -e $pid_file ) { #exists?
+		if ( -f $pid_file && -W $pid_file ) { #plain file, writable ?
+			open PF, "$pid_file" or do { PrintMsg(ERROR, "CreatePidfile(): Cant open $pid_file for reading\n"); exit 1; };       
+                        my $pid = <PF>;
+			close PF;
+
+			if ( ! -e "/proc/cpuinfo" ) {
+				PrintMsg(ERROR, "CreatePidfile(): /proc filesystem not mounted.\n"); 
+                                exit 1;
+			}
+			if ( -e "/proc/$pid") {
+				PrintMsg(ERROR, "CreatePidfile(): $pid is still running. Exiting.\n"); 
+				exit 1;
+			}
+		} else {
+			PrintMsg(ERROR, "CreatePidfile(): $pid_file is not writable or is not a plain file. Exiting.\n"); 
+                        exit 1;
+		}
+        } 
+
+	#there is no $pid_file, we can (re)create it
+	open PF, ">$pid_file" or do { PrintMsg(ERROR, "CreatePidfile(): Cant open $pid_file for writing\n"); exit 1; };
+	print PF $$;
+	close PF;
+}
+
+# ======================================================================================================
 
 sub GetParams {
 	my @dbs;
@@ -77,14 +320,14 @@ sub GetParams {
 
 	my ($auxuser, $auxpass);
 	my ($parallel, $parallel_sql);
-	my ($restart, $debug_lvl, $dry_run, $state_file, $max_load, $pid_file, $log_path);
+	my ($restart, $debug_lvl, $dry_run, $state_file, $max_load, $pid_file, $log_path, $log_dir);
 
 	my @objects;
 	my @cmp_columns;
 	my @cmp_sha;
 	my @mappings;
 	my @excludes;
-	my @time_ranges;
+	my @time_frames;
 
 	my $help = 0;
 	my $i = 0;
@@ -101,10 +344,11 @@ sub GetParams {
 	    'sqlparallelism=i' => \$parallel_sql,
 	    'remap|m=s' => \@mappings,
 	    'exclude|e=s' => \@excludes,
-	    'range|r=s' => \@time_ranges,
-	    'dry|test|t' => \$dry_run,
+	    'timeframe|t=s' => \@time_frames,
+	    'dry|test' => \$dry_run,
 	    'statefile|state|f=s' => \$state_file,
 	    'outputfile|logfile|log|o|l=s' => \$log_path,
+	    'logdir=s' => \$log_dir,
 	    'maxload=i' => \$max_load,
 	    'pid|pidfile=s' => \$pid_file,
 	    'help|h' => \$help) or $help=100;
@@ -140,6 +384,11 @@ sub GetParams {
 		}
 	}		
 
+	if (VerifyTime(@time_frames) == 0) {
+		PrintMsg(ERROR, "GetParams(): I'm outside available time slots. Check --timeframe|-t parameter.\n";
+		exit 1;
+	}
+
 	foreach my $d ($basedb, @dbs) {
 		my $dbname;
 		my %db;
@@ -173,13 +422,12 @@ sub GetParams {
 			$db{'ALIAS'} = uc($db{'ALIAS'});
 		}
 		$dbname = $db{'ALIAS'};
-		$BASEDB = $dbname if (not defined($BASEDB)); #primary
+		$basedb = $dbname if (not defined($basedb)); #primary
 
-		#if (defined($PROGRESS{$dbname})) { # check if name $db{'ALIAS'} is already taken
-		#	print "ERROR: alias $db{'ALIAS'} for $d is already taken. Please choose another.\n";
-		#	exit 1;
-		#}
-
+		if (defined($DATABASES{$dbname})) { # check if name (alias) is already taken
+			print "ERROR: alias $dbname is already taken. Please choose another.\n";
+			exit 1;
+		}
 
 		$DATABASES{$dbname} = \%db;
 		$DATABASES{$dbname}->{'NAME'} = $dbname;
@@ -187,8 +435,8 @@ sub GetParams {
 		$i++;
 	}
 
-	if (scalar(@SCHEMAS) == 0) {
-		PrintMsg ERROR, "GetParams(): Schema name is needed. --schema=schema1\n";
+	if (scalar(@objects) == 0) {
+		PrintMsg ERROR, "GetParams(): Schema name or table name is needed. --schema=schema1\n";
 		exit 1;
 	} 
 
@@ -214,7 +462,31 @@ sub GetParams {
 #	$CMP_COLUMN = uc($CMP_COLUMN) if (defined($CMP_COLUMN));
 }
 
+sub Terminate {
+	PrintMsg(ERROR, "Terminate(): ", POSIX::strftime('%y/%m/%d %H:%M:%S', localtime), "\n");
+
+	if (defined($CHILDREN{'child'})) { #is it child?
+
+		PrintMsg(INFO, "Child process $$ - exiting.\n");
+
+	} else { #or parent?
+
+		ShutdownWorkers();
+		PrintMsg(INFO, "Parent process $$ - exiting.\n");
+
+        	if ( $CONFIG{'pid_file'} && -e $CONFIG{'pid_file'} &&  -f $CONFIG{'pid_file'} && -W $CONFIG{'pid_file'} ) { 
+			PrintMsg(DEBUG, "Removing $PID_FILE.\n");
+			unlink $PID_FILE;
+		}
+
+	}
+
+	exit 1;
+}
+
 sub main {
+	my $list;
+	my $report = {};
 	
 	$| = 1; #no buffering on stdout
 
@@ -224,26 +496,15 @@ sub main {
 	SetProcessName(@ARGV);
 	GetParams();
 
-	if (VerifyTime(@TIME_RANGES) == 0) {
-		PrintMsg ERROR, "Stopping, I'm outside available time slots. (",POSIX::strftime('%y/%m/%d %H:%M:%S', localtime),")\n";
-		exit 0;
+
+	#TODO: do we load from file everything or starting list of table only which is re-processed?
+	if ($CONFIG{'state_file'}) {  #for now we are reprocessing old list
+		($list, $report) = LoadStateFile($CONFIG{'state_file'}, \%DATABASES);
 	}
 
-	my $list;
-	my $report = {};
-	my $logfile;
+	CreatePidfile($CONFIG{'pid_file'});
 
-	CreatePidfile();
-
-#TODO: do we load from file everything or starting list of table only which is re-processed?
-if ($STATE_FILE) {  #for now we are reprocessing old list
-	($list, $report, $logfile) = LoadStateFile($STATE_FILE, \%DATABASES);
-}
-
-if (!defined($LOG_FILE) && $logfile) { #if logfile not given use stored filename in state file
-	$LOG_FILE = $logfile;
-}
-
+#----
 if (not defined($list)) { #this is fresh start, no tables in statefile or no statefile
 	if ($CONTINUE_ONLY) {
 		PrintMsg ERROR, "Stopping, This is fresh start and --continueonly flag enabled. (",POSIX::strftime('%y/%m/%d %H:%M:%S', localtime),")\n";
