@@ -66,7 +66,7 @@ sub SetupLogger {
 	$RESULT_SEQUENCE = 1 if (defined($params->{'RESULT_SEQUENCE'}));
 
 	if ( defined($LOG_FILE) && -e $LOG_FILE && ( ! -f $LOG_FILE || -w $LOG_FILE ) ) {
-		Terminate "File $LOG_FILE is not a regular or writeable file.";
+		Terminate("File $LOG_FILE is not a regular or writeable file.");
 	}
 
 }
@@ -80,7 +80,7 @@ sub Terminate {
 	
 	$msg = 'Terminating.' if (!defined($msg));
 
-	PrintMsg ERROR, Carp::longmess($msg);
+	PrintMsg(ERROR, Carp::longmess($msg));
 	exit 1;
 }
 
@@ -134,18 +134,18 @@ sub PrintMsg {
 			close $f;
 
 	        } else {
-			PrintMsg ERROR || DEBUGNOFILE, Carp::longmess("File $LOG_FILE is not a regular or writeable file. Exiting.");
+			PrintMsg(ERROR || DEBUGNOFILE, Carp::longmess("File $LOG_FILE is not a regular or writeable file. Exiting."));
 			exit 1;
 	        }
 	}
 
 	if (defined($RESULT_FILE_FD)) { #TODO: pomysl jest zeby byl jakis counter z numerem lini na poczatku kazdej, zeby proces odbierajacy z pipea wiedzial
 					# ze wszystko jest ok
-		print $RESULT_FILE_FD $h, "<$RESULT_SEQUENCE>", @_, "\n";
+		print $RESULT_FILE_FD, "<$RESULT_SEQUENCE>", @_, "\n";
 		$RESULT_FILE_FD->flush();
 		$RESULT_SEQUENCE++;
 	} else {
-		print STDERR $h, @_, "\n";
+		print STDERR @_, "\n";
 		STDERR->flush(); #force flushing - it may be end of a pipe
 	}
 
@@ -162,7 +162,7 @@ sub OpenResultFile {
 
 	if ( ! -e $RESULTS_DIR ) { #directory doesn't exists
 		#try to create
-		File::Path::make_path($RESULTS_DIR, {error => \$err}) or Terminate "Cannot create results directory $RESULTS_DIR\n";	
+		File::Path::make_path($RESULTS_DIR, {error => \$err}) or Terminate("Cannot create results directory $RESULTS_DIR\n");	
 
 	} elsif (! -d $RESULTS_DIR || ! -w $RESULTS_DIR || ! -x $RESULTS_DIR) {
 
@@ -170,7 +170,7 @@ sub OpenResultFile {
 
 	}
 
-	open $RESULT_FILE_FD, ">>$file_name" or Terminate "Cannot create file $file_name\n";
+	open $RESULT_FILE_FD, ">>$file_name" or Terminate("Cannot create file $file_name\n");
 
 }
 

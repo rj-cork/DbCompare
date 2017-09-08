@@ -52,11 +52,8 @@ my $MAX_DIFFS = $BATCH_SIZE*10; #maximum out of sync recorded records. it is sef
 my %FIRST_STAGE_BATCH_PROGRESS :shared; # shared variable for workers synchronisation at the end of each batch processing
 my $WORKER_THREADS_COUNT; #number of workers/datasources
 
-use constant PROCESS_NAME = 'DataCompare';
+use constant PROCESS_NAME => 'DataCompare';
 
-use constant COMPARE_USING_COLUMN = 2;
-use constant COMPARE_USING_SHA1 = 1;
-use constant COMPARE_USING_PK = 0;
 
 # ---------------------------------------------------------------------------------------------------------------
 
@@ -157,20 +154,20 @@ sub ColumnTransformation {
 sub GetComparisonMethod {
 	my $global_settings = shift;	
 
-	my $cmp_method = COMPARE_USING_PK;
+	my $cmp_method = Database::COMPARE_USING_PK;
 
 	if (defined($global_settings->{compare_col})) {
 
-		$cmp_method = COMPARE_USING_PK;
-		Logger::PrintMsg (Logger::DEBUG2, "$msg compare using column ".$global_settings->{compare_col});
+		$cmp_method = Database::COMPARE_USING_PK;
+		Logger::PrintMsg (Logger::DEBUG2, "compare using column ".$global_settings->{compare_col});
 
 	} elsif (defined($global_settings->{compare_hash})) {
 
-		$cmp_method = COMPARE_USING_SHA1;
-		Logger::PrintMsg (Logger::DEBUG2, "$msg compare using SHA1 on all columns");
+		$cmp_method = Database::COMPARE_USING_SHA1;
+		Logger::PrintMsg (Logger::DEBUG2, "compare using SHA1 on all columns");
 
 	} else {
-		Logger::PrintMsg (Logger::DEBUG2, "$msg compare using PK/UK columns only");
+		Logger::PrintMsg (Logger::DEBUG2, "compare using PK/UK columns only");
 	}
 
 	return $cmp_method;
@@ -254,14 +251,14 @@ sub FirstStageWorker {
 
 	my $prep = $dbh->prepare($sql);
 	if(!defined($prep) or $dbh->err) { 
-		$RUNNING = -106;
+		$FIRST_STAGE_RUNNING = -106;
 		Logger::PrintMsg(Logger::ERROR, $worker_name, "$DBI::errstr for [$sql]");
 		return -1;
 	}
 
 	$prep->execute();
 	if(!defined($prep) or $dbh->err) { 
-		$RUNNING = -107;
+		$FIRST_STAGE_RUNNING = -107;
 		Logger::PrintMsg(Logger::ERROR, $worker_name, "$DBI::errstr for [$sql]");
 		return -1;
 	}

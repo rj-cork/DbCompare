@@ -27,13 +27,20 @@ use Logger;
 
 
 #GetColumns
-use constant CHECK_COLUMN_TYPE = 1;
-use constant CHECK_COLUMN_NULLABLE = 2;
+use constant CHECK_COLUMN_TYPE => 1;
+use constant CHECK_COLUMN_NULLABLE => 2;
 
 #GetPrimaryKey
-use constant PK_CHECK_ONLY = 1;
-use constant PK_DONT_CHECK = 2;
+use constant PK_CHECK_ONLY => 1;
+use constant PK_DONT_CHECK => 2;
 
+#comparison methods
+use constant COMPARE_USING_PK => 0;
+use constant COMPARE_USING_COLUMN => 1;
+use constant COMPARE_USING_SHA1 => 2;
+
+#
+use constant RESULT_BATCH_SIZE => 10000;
 
 # when modifing %{$columns} - $action=PK_DONT_CHECK - run in critical section!
 sub GetPrimaryKey {
@@ -138,7 +145,7 @@ sub GetPrimaryKey {
 	} else { #this is first worker to retrieve PK/UK information
 
 		my $str = "Columns for constraint $cname: ";
-		my @cols = sort { $columns->{$a}->{CPOSITON} <=> $columns->{$b}->{CPOSITON} } grep {defined $solumns->{$_}->{CPOSITON}} keys %{$columns};
+		my @cols = sort { $columns->{$a}->{CPOSITON} <=> $columns->{$b}->{CPOSITON} } grep {defined $columns->{$_}->{CPOSITON}} keys %{$columns};
 		$str .= join(',', @cols);
 		Logger::PrintMsg(Logger::DEBUG, $tag, "$str $cname");
 
@@ -158,6 +165,8 @@ sub GetColumns {
 	my $owner;
 	my $table;
 	my $sql;
+
+	my ($cn, $c);
 
 	$owner = $object->{owner} if($object->{owner});
 	$table = $object->{table};
@@ -179,8 +188,8 @@ sub GetColumns {
 	if (scalar keys %{$columns}) { #is it populated already? 
 
 		# if there are columns retrieved already then just compare if the match
-		foreach my $c (keys %{$r}) { 
-			my $cn = $r->{$c}->{'COLUMN_NAME'};
+		foreach $c (keys %{$r}) { 
+			$cn = $r->{$c}->{'COLUMN_NAME'};
 
 			if ( $checks > 0  && (not defined($columns->{$cn})) ) {
 				Logger::PrintMsg(Logger::ERROR, $tag, "Different tables, unexpected $cn column");
@@ -188,7 +197,7 @@ sub GetColumns {
 			}
 
 			if ( ($checks & CHECK_COLUMN_TYPE) &&
-			     ($columns->{$cn}->{'DATA_TYPE'} ne $r->{$c}->{'DATA_TYPE'}) {
+			     ($columns->{$cn}->{'DATA_TYPE'} ne $r->{$c}->{'DATA_TYPE'}) ) {
 
 				Logger::PrintMsg(Logger::ERROR, $tag, "Data types for column $cn differs");
 				return -1 * CHECK_COLUMN_TYPE;
@@ -211,12 +220,12 @@ sub GetColumns {
 
 		Logger::PrintMsg(Logger::DEBUG, $tag, "Columns verified correctly");
 
-		return GetPrimaryKey($columnt, $dbh, $object, $tag, PK_CHECK_ONLY);
+		return GetPrimaryKey($columns, $dbh, $object, $tag, PK_CHECK_ONLY);
 
 	} else {
 		# read column list and store to shared hash ref.
-		foreach my $c (keys %{$r}) {
-			my $cn = $r->{$c}->{'COLUMN_NAME'};
+		foreach $c (keys %{$r}) {
+			$cn = $r->{$c}->{'COLUMN_NAME'};
 
 			if (is_shared($columns)) {
 				$columns->{$cn} = &share({});
@@ -243,7 +252,7 @@ sub GetColumns {
 
 		Logger::PrintMsg(Logger::DEBUG, $tag, $s);
 
-		return GetPrimaryKey($columnt, $dbh, $object, $tag, PK_DONT_CHECK);
+		return GetPrimaryKey($columns, $dbh, $object, $tag, PK_DONT_CHECK);
 	}
 
 }
@@ -257,7 +266,7 @@ sub PrepareFirstStageSelect {
 	my $parallel = $settings->{select_concurency};
 	
 	#get pk columns
-	my @pk = sort { $columns{$a}->{CPOSITON} <=> $columns{$b}->{CPOSITON} } grep {defined $columns{$_}->{CPOSITON}} keys %{$columns};
+	my @pk = sort { $columns->{$a}->{CPOSITON} <=> $columns->{$b}->{CPOSITON} } grep {defined $columns->{$_}->{CPOSITON}} keys %{$columns};
 
 	#map excluded columns from array to hash
 	my %excl_col = map {$_=>1} @{$settings->{exclude_cols}}; #map from array to hash
@@ -284,21 +293,21 @@ sub PrepareFirstStageSelect {
 		$sql .=  " /*+ PARALLEL($parallel) */ " if ($parallel);
 		$sql .= join(',', @pk).", DBMS_CRYPTO.Hash(\n";
 
-	        foreach my $i (sort { $columns{$a}->{'COLUMN_ID'} <=> $columns{$b}->{'COLUMN_ID'} } keys %{$columns}) {
+	        foreach my $i (sort { $columns->{$a}->{'COLUMN_ID'} <=> $columns->{$b}->{'COLUMN_ID'} } keys %{$columns}) {
 
 			#don't include this column in SHA1 if it is part of constraint PK/UK
-			next if (defined($columns{$i}->{CPOSITON})); 
+			next if (defined($columns->{$i}->{CPOSITON})); 
 
 			next if (defined($excl_col{$i})); #check if we want to skip this column
 
-	                if ($columns{$i}->{DATA_TYPE} eq 'BLOB' || $columns{$i}->{DATA_TYPE} eq 'CLOB' ) {
-				if (defined $columns{$i}->{NULLABLE}) {
+	                if ($columns->{$i}->{DATA_TYPE} eq 'BLOB' || $columns->{$i}->{DATA_TYPE} eq 'CLOB' ) {
+				if (defined $columns->{$i}->{NULLABLE}) {
 	        	                $sql .= $separator."DBMS_CRYPTO.Hash(NVL($i,'00'),3)\n"; #NVL(some data, some hex as alternative);
 				} else {
 		                        $sql .= $separator."DBMS_CRYPTO.Hash($i,3)\n";
 				}
-	                } elsif ( $columns{$i}->{DATA_TYPE} eq 'XMLTYPE') {
-				if (defined $columns{$i}->{NULLABLE}) {
+	                } elsif ( $columns->{$i}->{DATA_TYPE} eq 'XMLTYPE') {
+				if (defined $columns->{$i}->{NULLABLE}) {
 					#$sql .= $separator."DBMS_CRYPTO.Hash(NVL(XMLType.getBlobVal($i,nls_charset_id('AL32UTF8')),'00'),3)\n"; 
 	                                # with getBlobVal parallel doesn't work, but hash is working strange way
 	                                $sql .= $separator."DBMS_CRYPTO.Hash(NVL2($i,XMLType.getClobVal($i),'00'),3)\n";
@@ -307,7 +316,7 @@ sub PrepareFirstStageSelect {
 					$sql .= $separator."DBMS_CRYPTO.Hash(XMLType.getClobVal($i),3)\n";
 				}
 	                } else {
-				if (defined $columns{$i}->{NULLABLE}) {
+				if (defined $columns->{$i}->{NULLABLE}) {
 	                        	$sql .= $separator."DBMS_CRYPTO.Hash(NVL(utl_raw.cast_to_raw($i),'00'),3)\n";
 				} else {
 		                        $sql .= $separator."DBMS_CRYPTO.Hash(utl_raw.cast_to_raw($i),3)\n";
@@ -338,24 +347,30 @@ sub PrepareSecondStageSelect {
 	my $tablename = $object->{table};
         my $schema = $object->{owner};
 	my $partition = '';
-	my $range = '';
+	my $range = '1=1';
+
+	my $sql = 'SELECT ';
+
+	#get pk columns
+	my @pk = sort { $columns->{$a}->{CPOSITON} <=> $columns->{$b}->{CPOSITON} } grep {defined $columns->{$_}->{CPOSITON}} keys %{$columns};
 
 	$partition = $object->{partition_name} if (defined($object->{partition_name}));
 	$partition = $object->{partition_for} if (defined($object->{partition_for}));
 	$range = $object->{pk_range} if (defined($object->{pk_range}));
 
-	my $sql = 'SELECT ';
-
-	#get pk columns
-	my @pk = sort { $columns{$a}->{CPOSITON} <=> $columns{$b}->{CPOSITON} } grep {defined $columns{$_}->{CPOSITON}} keys %{$columns};
 
 
         if ($cmp_method == COMPARE_USING_COLUMN) {
-		$sql = 'SELECT '.$CMP_COLUMN." FROM $tablename WHERE ".join(" and ", map { "$_=?" } @PK_COLUMNS ).' AND '.$LIMITER;
-	} elsif ($CMP_KEY_ONLY) {
-		$sql = "SELECT 'exists' FROM $tablename WHERE ".join(" and ", map { "$_=?" } @PK_COLUMNS ).' AND '.$LIMITER;
-	} else {
-		$sql = SHA1Sql(@PK_COLUMNS).$tablename.' WHERE '.join(" and ", map { "$_=?" } @PK_COLUMNS );
+
+		$sql = 'SELECT '.$settings->{'compare_col'}." FROM $tablename WHERE ".join(" and ", map { "$_=?" } @pk ).' AND '.$range;
+
+	} elsif ($cmp_method == COMPARE_USING_SHA1) {
+
+		$sql = SHA1Sql(@pk).$tablename.' WHERE '.join(" and ", map { "$_=?" } @pk );
+
+	} else { #default COMPARE_USING_PK
+
+		$sql = "SELECT 'exists' FROM $tablename WHERE ".join(" and ", map { "$_=?" } @pk ).' AND '.$range;
 	}
 
 	$sql .= " CMP#VALUE FROM $schema.$tablename $partition WHERE $range ORDER BY ".join(',', @pk);
@@ -367,7 +382,7 @@ sub SessionSetup {
 	my $dbh = shift;
 
 	$dbh->{RaiseError} = 0; #dont die imediately
-        $dbh->{RowCacheSize} = $BATCH_SIZE; 
+        $dbh->{RowCacheSize} = RESULT_BATCH_SIZE; 
 
 	$dbh->do("ALTER SESSION SET NLS_DATE_FORMAT='YYYY-MM-DD HH24:MI:SS'");
 	$dbh->do("ALTER SESSION SET NLS_TIMESTAMP_FORMAT='YYYY-MM-DD HH24:MI:SS.FF'");
