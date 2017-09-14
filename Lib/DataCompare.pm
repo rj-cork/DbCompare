@@ -410,20 +410,20 @@ sub FirstStageFinalCheck {
 
 	lock(%DIFFS); #shouldnt be needed
 
-	foreach my $w (sort keys(%DIFFS)) { #for each worker/database stored in %DIFFS
+	foreach my $worker_name (sort keys(%DIFFS)) { #for each worker/database stored in %DIFFS
 		
-		my @dbs4comparison = grep {$_ ne $w} keys %DIFFS; #list of databases/workers != this one
+		my @dbs4comparison = grep {$_ ne $worker_name} keys %DIFFS; #list of databases/workers != this one
 		my $in_sync_counter=0; #should be 0, because they should be cleared by workers 
 		my $out_of_sync_counter=0;
 		my $thisdb_only_counter=0;
 
-		foreach my $k (keys %{$DIFFS{$w}}) { #each key left in DIFFS hash for given worker
+		foreach my $k (keys %{$DIFFS{$worker_name}}) { #each key left in DIFFS hash for given worker
 
 			my $match = 1;
 			foreach my $odb (@dbs4comparison) { #check whats inside others workers' hashes
 				
 				if ( defined($DIFFS{$odb}->{$k}) ) { #there is matching key stored in some other DB
-					if ($DIFFS{$odb}->{$k} ne $DIFFS{$w}->{$k} ) { #key exists but value differs
+					if ($DIFFS{$odb}->{$k} ne $DIFFS{$worker_name}->{$k} ) { #key exists but value differs
 						$match = 0;
 						$out_of_sync_counter++;
 						last;
@@ -442,7 +442,7 @@ sub FirstStageFinalCheck {
 		Logger::PrintMsg(DEBUG, $worker_name, "out of sync: $out_of_sync_counter, missing in other DBs: $thisdb_only_counter/db count, bad: $in_sync_counter");
 	}
 
-	Logger::PrintMsg(INFO, $worker_name, "FirstStageWorker finished: different values: $outofsync, missing somewhere: $missingsomewhere");
+	Logger::PrintMsg(INFO, "FirstStageWorker finished: different values: $outofsync, missing somewhere: $missingsomewhere");
 	return $outofsync+$missingsomewhere;
 }
 
@@ -514,7 +514,7 @@ sub SecondStagePrepare {
 
         my $i = 0;
         foreach my $worker_name (sort keys %{$args_ref->{datasources}}) {
-		my $dbh = Database::Connect($data_source->{connection}, $worker_name);
+		my $dbh = Database::Connect($args_ref->{datasources}->{$worker_name}->{connection}, $worker_name);
 
 		if (not defined($dbh)) {
 			Logger::Terminate("Not connected");
@@ -534,15 +534,17 @@ sub SecondStageLookup {
 	my $deleted=0;
 	my $key;
 	my $worker_name;
+	my $global_settings = $args_ref->{settings};
 
 	lock(%DIFFS); #shouldnt be needed - no threads here
+	lock(%COLUMNS);
 
 	my %prep_sqls;
 # 1) connect to database again and create list of unique keys/PKs stored by all workers (out of sync records)
 	my %unique_keys;
 	foreach $worker_name (keys(%DIFFS)) { #for each worker/database stored in %DIFFS
 
-		if (not defined($dbhs->{$worker_name})) {
+		if (not defined($dbhs_ref->{$worker_name})) {
 			Logger::Terminate("No such worker");
 			return -1;
 		}
@@ -556,7 +558,7 @@ sub SecondStageLookup {
 							\%COLUMNS, 
 							GetComparisonMethod($args_ref->{settings}));
 
-		$prep_sqls{$worker_name} = $dbh->prepare($sql);
+		$prep_sqls{$worker_name} = $dbhs_ref->{$worker_name}->prepare($sql);
 
 		if($prep_sqls{$worker_name}->err) { 
 			Logger::Terminate("[$worker_name] ERROR: $DBI::errstr for [$sql]"); #error on DBI prep
@@ -564,11 +566,12 @@ sub SecondStageLookup {
 		}
 	}
 
-	my @pk_columns = sort { $COLUMNS{$a}->{CPOSITON} <=> $COLUMNS{$b}->{CPOSITON} } grep {defined $COLUMNS{$_}->{CPOSITON}} keys %{$COLUMNS};
+	my @pk_columns = sort { $COLUMNS{$a}->{CPOSITON} <=> $COLUMNS{$b}->{CPOSITON} } grep {defined $COLUMNS{$_}->{CPOSITON}} keys %COLUMNS;
 
 # 2) for each PK check current value in all databases
 	foreach $key (keys(%unique_keys)) { #for each key found in any database/worker output
 		my $exists = 0;
+		my $match;
 
 		foreach $worker_name (keys %DIFFS) { #check all databases/workers output
 
@@ -627,16 +630,16 @@ sub SecondStageLookup {
 
 # 3) if SHA1 or timestamp column is the same then remove from all DIFF hashes
 		my $v;
-		my $match = 1;
+		$match = 1;
 		if ($exists == 0) { # key $k no longer exists in any database
 			$deleted++; #increment counter
 		} else {
 			foreach $worker_name (keys %DIFFS) { #check all databases/workers output
 				if (defined($DIFFS{$worker_name}->{$key})) { #there is matching key 
-					if (not defined($val)) {
+					if (not defined($v)) {
 						$v = $DIFFS{$worker_name}->{$key};
 					} 
-					if ($DIFFS{$wworker_name->{$key} ne $v) { #key exists and the value is not the same
+					if ($DIFFS{$worker_name->{$key}} ne $v) { #key exists and the value is not the same
 						$match=0;
 						last;
 					}
@@ -660,7 +663,7 @@ sub SecondStageLookup {
 	PrintMsg("SecondStageLookup: $synced synced, $deleted deleted, $outofsync out of sync\n");
 	foreach my $p (keys %prep_sqls) {
 		$prep_sqls{$p}->finish;
-		$dbhs{$p}->disconnect();
+		$dbhs_ref->{$p}->disconnect();
 	}
 	return $outofsync;
 }
@@ -736,7 +739,7 @@ sub CoordinatorProcess { #we are forked process that is supposed to compare give
 		$SECONDSTAGESLEEP = $args_ref->{settings}->{stage2_sleep} if (defined($args_ref->{settings}->{stage2_sleep}));
 		
 		my $dbhs = SecondStagePrepare($args_ref);
-		for ($i=0;$i<$SECONDSTAGETRIES;$i++) {
+		for (my $i=0;$i<$SECONDSTAGETRIES;$i++) {
 			sleep($SECONDSTAGESLEEP) if($i);
 			Logger::PrintMsg("SecondStage...");
 			last if (SecondStageLookup($dbhs, $args_ref) == 0); #all is in sync, no need for more checking
