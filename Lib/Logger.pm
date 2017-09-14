@@ -1,4 +1,4 @@
-package Logger;
+package Lib::Logger;
 
 # Logger package - functions for printing debug messages and results presentation
 # Version 0.01
@@ -41,6 +41,10 @@ use constant DEBUG3 => 3;
 use constant DEBUGNOFILE => 128;
 use constant DEBUGNOSTDOUT => 256;
 use constant DEBUGTRACE => 512;#Carp::longmess
+
+use base 'Exporter';
+our @EXPORT_OK = qw(DEBUG ERROR INFO WARNING DEBUG1 DEBUG2 DEBUG3 DEBUGNOFILE DEBUGNOSTDOUT DEBUGTRACE);
+
 
 $|=1;
 my $LOG_FILE;# :shared;

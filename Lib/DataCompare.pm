@@ -1,4 +1,4 @@
-package DataCompare;
+package Lib::DataCompare;
 
 # DataCompare package - functions for comparing data in multiple tables/table partitions
 # Version 1.21
@@ -29,8 +29,8 @@ use DBD::Oracle qw(:ora_types);
 use Data::Dumper;
 
 
-use Logger;
-use Database;
+use Lib::Logger qw(DEBUG DEBUG2 ERROR INFO WARNING);
+use Lib::Database qw(COMPARE_USING_PK COMPARE_USING_SHA1 CHECK_COLUMN_TYPE CHECK_COLUMN_NULLABLE);
 
 $|=1;
 
@@ -154,20 +154,20 @@ sub ColumnTransformation {
 sub GetComparisonMethod {
 	my $global_settings = shift;	
 
-	my $cmp_method = Database::COMPARE_USING_PK;
+	my $cmp_method = COMPARE_USING_PK;
 
 	if (defined($global_settings->{compare_col})) {
 
-		$cmp_method = Database::COMPARE_USING_PK;
-		Logger::PrintMsg (Logger::DEBUG2, "compare using column ".$global_settings->{compare_col});
+		$cmp_method = COMPARE_USING_PK;
+		Logger::PrintMsg(DEBUG2, "compare using column ".$global_settings->{compare_col});
 
 	} elsif (defined($global_settings->{compare_hash})) {
 
-		$cmp_method = Database::COMPARE_USING_SHA1;
-		Logger::PrintMsg (Logger::DEBUG2, "compare using SHA1 on all columns");
+		$cmp_method = COMPARE_USING_SHA1;
+		Logger::PrintMsg(DEBUG2, "compare using SHA1 on all columns");
 
 	} else {
-		Logger::PrintMsg (Logger::DEBUG2, "compare using PK/UK columns only");
+		Logger::PrintMsg(DEBUG2, "compare using PK/UK columns only");
 	}
 
 	return $cmp_method;
@@ -207,7 +207,7 @@ sub FirstStageWorker {
 		lock(%COLUMNS);
 
 
-		my $checks = Database::CHECK_COLUMN_TYPE || Database::CHECK_COLUMN_NULLABLE;
+		my $checks = CHECK_COLUMN_TYPE || CHECK_COLUMN_NULLABLE;
 
 		if (Database::GetColumns(\%COLUMNS, $dbh, $data_source->{object}, $worker_name, $checks) < 0) {
 			lock($FIRST_STAGE_RUNNING);
@@ -235,7 +235,7 @@ sub FirstStageWorker {
 				if ($cmp_method == COMPARE_USING_PK) { #switched to PK compare mode
 					undef $global_settings->{compare_col} if (defined($global_settings->{compare_col}));
 					undef $global_settings->{compare_hash} if (defined($global_settings->{compare_hash}));
-	                		Logger::PrintMsg(Logger::WARNING, $worker_name, "Switching to keyonly comparison mode. All columns for comparison are in PK.");
+	                		Logger::PrintMsg(WARNING, $worker_name, "Switching to keyonly comparison mode. All columns for comparison are in PK.");
 				}
         	        }
 		}
@@ -247,19 +247,19 @@ sub FirstStageWorker {
 							\%COLUMNS, 
 							$global_settings);
 
-	Logger::PrintMsg(Logger::DEBUG, $worker_name, "$sql");
+	Logger::PrintMsg(DEBUG, $worker_name, "$sql");
 
 	my $prep = $dbh->prepare($sql);
 	if(!defined($prep) or $dbh->err) { 
 		$FIRST_STAGE_RUNNING = -106;
-		Logger::PrintMsg(Logger::ERROR, $worker_name, "$DBI::errstr for [$sql]");
+		Logger::PrintMsg(ERROR, $worker_name, "$DBI::errstr for [$sql]");
 		return -1;
 	}
 
 	$prep->execute();
 	if(!defined($prep) or $dbh->err) { 
 		$FIRST_STAGE_RUNNING = -107;
-		Logger::PrintMsg(Logger::ERROR, $worker_name, "$DBI::errstr for [$sql]");
+		Logger::PrintMsg(ERROR, $worker_name, "$DBI::errstr for [$sql]");
 		return -1;
 	}
 
@@ -300,7 +300,7 @@ sub FirstStageWorker {
 				#values to be stored as originals 
 				$DIFFS_ORIGINAL{$worker_name}->{$key} = \@cols;
 
-				Logger::PrintMsg(Logger::DEBUG2, $worker_name, " key: [$key] value: $val");
+				Logger::PrintMsg(DEBUG2, $worker_name, " key: [$key] value: $val");
 	
 				my $thesame = 1;
 				my $match = 1;
@@ -332,7 +332,7 @@ sub FirstStageWorker {
 					$DIFFS{$worker_name}->{$key} = $val;
 				}
 				$record_no++;
-				Logger::PrintMsg(Logger::DEBUG1, $worker_name, $record_no) if ($record_no % 1000000 == 0);
+				Logger::PrintMsg(DEBUG, $worker_name, $record_no) if ($record_no % 1000000 == 0);
 			}
 
 			#check how many out of sync records is at the moment
@@ -344,19 +344,21 @@ sub FirstStageWorker {
 			$total_out_of_sync = $max_oos;
 
 			#limit so the script will not whole memory if tables are totally different
-			if($OUTOFSYNCCOUNTER > $MAX_DIFFS) { 
+			if($total_out_of_sync > $MAX_DIFFS) { 
 				$FIRST_STAGE_RUNNING=-108;
-				Logger::PrintMsg(Logger::ERROR, $worker_name, "Too many out of sync records: $total_out_of_sync limit is $MAX_DIFFS.");
+				Logger::PrintMsg(ERROR, $worker_name, "Too many out of sync records: $total_out_of_sync limit is $MAX_DIFFS.");
 				$prep->finish;
 				$dbh->disconnect();
 				return -1;
 			}
-		}
 
-		Logger::PrintMsg(Logger::DEBUG1, $worker_name, "Batch summary. Rows processed: $i, in sync: $in_sync_counter, ",
+			Logger::PrintMsg(DEBUG, $worker_name, 
+			  "Batch summary. Rows processed: $record_no, in sync: $in_sync_counter, ",
 			  "out of: $out_of_sync_counter, missing in other db: $thisdb_only_counter, ",
 			  "total out of sync: $total_out_of_sync");
 		
+		}
+
 		#this is end of single batch processing
 		#synchronize all workers here, comparing speed is as fast as the slowest worker
 		{ 
@@ -373,7 +375,7 @@ sub FirstStageWorker {
 					#wait if there is any lagging worker
 					$in_sync = 0 if ($FIRST_STAGE_BATCH_PROGRESS{$k} < $p); #was != $p
 
-					Logger::PrintMsg(Logger::DEBUG2, $worker_name, "batch progres for $k is ".$FIRST_STAGE_BATCH_PROGRESS{$k});
+					Logger::PrintMsg(DEBUG2, $worker_name, "batch progres for $k is ".$FIRST_STAGE_BATCH_PROGRESS{$k});
 				}
 
 				#are we the last worker finishing this batch?
@@ -393,7 +395,7 @@ sub FirstStageWorker {
 	$dbh->disconnect();
 
 
-	Logger::PrintMsg(Logger::DEBUG, $worker_name, "FirstStageWorker finished: out of sync: $total_out_of_sync, total rows: $row_no.");
+	Logger::PrintMsg(DEBUG, $worker_name, "FirstStageWorker finished: out of sync: $total_out_of_sync, total rows: $record_no.");
 	{
 		lock($FIRST_STAGE_RUNNING);
 		$FIRST_STAGE_RUNNING--;
@@ -437,10 +439,10 @@ sub FirstStageFinalCheck {
 		$outofsync += $out_of_sync_counter;
 		$missingsomewhere += $thisdb_only_counter;
 		# there should be no $in_sync_counter left in DIFFS hashes
-		Logger::PrintMsg(Logger::DEBUG, $worker_name, "out of sync: $out_of_sync_counter, missing in other DBs: $thisdb_only_counter/db count, bad: $in_sync_counter");
+		Logger::PrintMsg(DEBUG, $worker_name, "out of sync: $out_of_sync_counter, missing in other DBs: $thisdb_only_counter/db count, bad: $in_sync_counter");
 	}
 
-	Logger::PrintMsg(Logger::INFO, $worker_name, "FirstStageWorker finished: different values: $outofsync, missing somewhere: $missingsomewhere");
+	Logger::PrintMsg(INFO, $worker_name, "FirstStageWorker finished: different values: $outofsync, missing somewhere: $missingsomewhere");
 	return $outofsync+$missingsomewhere;
 }
 
@@ -481,7 +483,7 @@ sub SecondStageGetRow {
 	my $msg;
 
 	$msg = "PK/U: ".(join(',',@{$key}))." ";
-	Logger::PrintMsg(Logger::DEBUG1, $dbname, $msg);
+	Logger::PrintMsg(DEBUG, $dbname, $msg);
 
 	$prep->execute(@{$key}) or do {
 		Logger::Terminate("ERROR: $DBI::errstr");
@@ -500,7 +502,7 @@ sub SecondStageGetRow {
 		return undef;
 	}
 
-	Logger::PrintMsg(Logger::DEBUG1, $dbname, (defined $ret_val)?"$ret_val\n":"null\n");
+	Logger::PrintMsg(DEBUG, $dbname, (defined $ret_val)?"$ret_val\n":"null\n");
 
 
 	return $ret_val;
@@ -617,7 +619,7 @@ sub SecondStageLookup {
 				$DIFFS_ORIGINAL{$worker_name}->{$key} = $newval;
 
 				$DIFFS{$worker_name}->{$key} = $val; #add or update
-				Logger::PrintMsg(Logger::DEBUG2, $worker_name, " key: [$key] value: $val");
+				Logger::PrintMsg(DEBUG2, $worker_name, " key: [$key] value: $val");
 
 				$exists = 1;
 			}
