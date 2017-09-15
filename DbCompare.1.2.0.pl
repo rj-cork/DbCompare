@@ -23,7 +23,7 @@
 require 5.8.2;
 
 use strict;
-use Cwd;
+#use Cwd;
 use File::Basename;
 #use lib (dirname(Cwd::abs_path($0)).'/lib');
 use Lib::DataCompare;
@@ -33,7 +33,7 @@ use Storable;
 use Data::Dumper;
 use Getopt::Long;
 use Pod::Usage;
-use POSIX qw(strftime :sys_wait_h :signal_h);
+use POSIX; #qw(strftime :sys_wait_h :signal_h);
 use IO::Select;
 use IO::Handle;
 use IO::Pipe;
@@ -626,11 +626,9 @@ sub Terminate {
 }
 
 sub main {
-	my $list;
 	my $report = {};
 	my $databases;
 	my $list;
-	my $report;
 	
 	$| = 1; #no buffering on stdout
 
