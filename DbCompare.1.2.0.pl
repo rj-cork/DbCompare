@@ -28,7 +28,7 @@ use File::Basename;
 #use lib (dirname(Cwd::abs_path($0)).'/lib');
 use Lib::DataCompare;
 use Lib::Database;
-use Lib::Logger qw(PrintMsg ERROR WARNING DEBUG DEBUG1 DEBUG2 DEBUG3);
+use Lib::Logger qw(PrintMsg ERROR WARNING DEBUG DEBUG1 DEBUG2 DEBUG3 INFO);
 use Storable;
 use Data::Dumper;
 use Getopt::Long;
@@ -44,6 +44,7 @@ my %CONFIG = (
 		'sql_parallelism' => 1,
 		);
 my %CHILDREN;
+my $SKIP_PARTS_ROW_LIMIT = Lib::Database::RESULT_BATCH_SIZE;
 
 # lib ======================================================================================================
 
@@ -435,7 +436,7 @@ sub GetObjects {
 				exit 1;
 			}
 
-			map {$table_list{$db}->{$_} = $h_ref->{$_}} keys %{$h_ref};
+			map {$objects_all{$db}->{$_} = $h_ref->{$_}} keys %{$h_ref};
 		}
 	}
 
@@ -525,7 +526,7 @@ sub GetParams {
 	}
 
 	if (VerifyTime(@time_frames) == 0) {
-		PrintMsg(ERROR, "GetParams(): I'm outside available time slots. Check --timeframe|-t parameter.\n";
+		PrintMsg(ERROR, "GetParams(): I'm outside available time slots. Check --timeframe|-t parameter.\n");
 		exit 1;
 	}
 
@@ -640,7 +641,7 @@ sub main {
 
 
 	if ($CONFIG{'state_file'}) {  #for now we are reprocessing old list
-		($list, $report) = LoadStateFile($CONFIG{'state_file'}, \%DATABASES);
+		($list, $report) = LoadStateFile($CONFIG{'state_file'}, $databases);
 	}
 
 	CreatePidfile($CONFIG{'pid_file'});
