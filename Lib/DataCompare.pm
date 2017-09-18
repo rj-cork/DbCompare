@@ -173,6 +173,29 @@ sub GetComparisonMethod {
 	return $cmp_method;
 }
 
+# %DIFFS contains values which are SHA1/choosen column/flag (not)exist or key that is generated from PK (multicolumn possible)
+# In Second Stage comparison it is needed to check again values colected in %DIFFS. Thats why function converting key for %DIFFS 
+# to PK of compared table is needed.
+
+# In first version of DbCompare function doing Pk2Diff transformation was $pkcol1,$pkcol2,$pkcol3 -> "$pkcol1|$pkcol2|$pkcol3" 
+# and Diff2Pk was "$pkcol1|$pkcol2|$pkcol3" -> $pkcol1,$pkcol2,$pkcol3 
+# which was problematic as without escaping '|' it was not possible to get correct output from Diff2Pk function when one of 
+# pk columns contained '|' character
+
+#Therefore Pk2Diff should contain escaping (ie with '\') of column separator chracter '|' and escaping escaping character 
+# for 'this_is_col|umn1', 'col2', '3\3' -> 'this_is_col\|umn1|col2|3\\3'
+# Diff2Pk would be:  @r=split(/(?:\\\\\|)|(?:(?<!\\)\|)/, shift); map s/\\\|/\|/g, @r; map s/\\\\/\\/g; return @r;
+
+# much easier is to keep originals in additional hash instead of escaping and joing / splitting and unescaping
+
+sub DiffHash2Pk {
+
+}
+
+sub Pk2DiffHash {
+
+}
+
 sub FirstStageWorker {
 	my $data_source = shift;
 	my $global_settings = shift;
