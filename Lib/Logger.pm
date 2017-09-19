@@ -31,13 +31,13 @@ use FileHandle;
 use File::Path qw(make_path);
 use Carp;# qw(cluck longmess shortmess);
 
-use constant ERROR => -2;
-use constant WARNING => -1;
-use constant INFO => 0;
-use constant DEBUG => 1;
-use constant DEBUG1 => 1;
-use constant DEBUG2 => 2;
-use constant DEBUG3 => 3;
+use constant ERROR => 8;
+use constant WARNING => 9;
+use constant INFO => 10;
+use constant DEBUG => 11;
+use constant DEBUG1 => 11;
+use constant DEBUG2 => 12;
+use constant DEBUG3 => 13;
 use constant DEBUGNOFILE => 128;
 use constant DEBUGNOSTDOUT => 256;
 use constant DEBUGTRACE => 512;#Carp::longmess
@@ -50,7 +50,7 @@ $|=1;
 my $LOG_FILE;# :shared;
 my $OUTPUT; #pipe or STDOUT
 my $RESULTS_DIR;
-my $DEBUG_LEVEL = 0;
+my $DEBUG_LEVEL = WARNING;
 my $RESULT_FILE_FD;
 my $RESULT_SEQUENCE = undef; #set to 1 to enable - shows sequence for each output line
 			# for checking correct msg flow from coordinator to main process
@@ -114,7 +114,7 @@ sub PrintMsg {
 		$no_stdout = 100;
 		$lvl &= ~DEBUGNOSTDOUT;
 	}
-
+	
 	return if ($lvl > $DEBUG_LEVEL); #skip if current debug level is lower than lvl of the message
 
 	$tag = '[ERROR] '.$tag if ($lvl == ERROR);

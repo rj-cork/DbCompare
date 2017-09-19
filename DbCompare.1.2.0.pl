@@ -105,7 +105,7 @@ sub SetProcessName {
                         $new_name .= " $a";
                 }
         }
-        $0 = $new_name;
+	$0 = $new_name;
 }
   
 #=== Time verification functions ===
@@ -450,7 +450,6 @@ sub GetParams {
 	my %databases;
 
 	my ($auxuser, $auxpass);
-	my ($parallel, $parallel_sql);
 	my ($restart, $debug_lvl, $dry_run, $state_file, $max_load, $pid_file, $log_path, $log_dir);
 
 	my @objects;
@@ -471,8 +470,8 @@ sub GetParams {
 	    'comparesha|comparesum=s' => \@cmp_sha,
 	    'restart' => \$restart, #$CONTINUE_ONLY,
             'verbose|v+' => \$debug_lvl,
-	    'parallelism|p=i' => \$parallel,
-	    'sqlparallelism=i' => \$parallel_sql,
+	    'parallelism|p=i' => \$CONFIG{parallelism},
+	    'sqlparallelism=i' => \$CONFIG{sql_parallelism},
 	    'remap|m=s' => \@mappings,
 	    'exclude|e=s' => \@excludes,
 	    'timeframe|t=s' => \@time_frames,
@@ -485,27 +484,21 @@ sub GetParams {
 	    'help|h' => \$help) or $help=100;
 
 	if ($help) {
-               # pod2usage(1);
+                #pod2usage(1);
                 pod2usage( -verbose => 2, -exitval => 1, -output  => \*STDOUT);
                 exit 0;
         }
 
-	if (scalar(@dbs) < 2) {
-		PrintMsg(ERROR, "GetParams(): At least 2 database connections are needed.\n");
-		exit 1;
-	}
 	
-	if ($parallel > 16 || $parallel < 1) {
+	if ($CONFIG{parallelism} > 16 || $CONFIG{parallelism} < 1) {
 		PrintMsg(ERROR, "GetParams(): --parallelism outside valid range 1 to 16.\n");
 		exit 1;
 	}
-	$CONFIG{'parallelism'} = $parallel;
 
-	if ($parallel_sql > 24 || $parallel_sql < 1) {
+	if ($CONFIG{sql_parallelism} > 24 || $CONFIG{sql_parallelism}  < 1) {
 		PrintMsg(ERROR, "GetParams(): --sqlparallelism outside valid range 1 to 24.\n");
 		exit 1;
 	}
-	$CONFIG{'sql_parallelism'} = $parallel_sql;
 
 	if ($auxuser) {
 		if ($auxuser =~ /([\w\d]+)(?:\/([\w\d]+))?/) {
@@ -576,6 +569,11 @@ sub GetParams {
 		$i++;
 	}
 
+	if (scalar(keys %databases) < 2) {
+		PrintMsg ERROR, "GetParams(): Provide two or more database connection strings. --db=user\@host1/service1 --db=user\@host2/service2\n";
+		exit 1;
+	}
+
 	if (scalar(@objects) == 0) {
 		PrintMsg ERROR, "GetParams(): Schema name or table name is needed. --schema=schema1\n";
 		exit 1;
@@ -636,9 +634,9 @@ sub main {
 	$SIG{INT} = \&Terminate;
 	$SIG{TERM} = \&Terminate;
 
-	SetProcessName(@ARGV);
 	($databases, $list) = GetParams();
 
+	SetProcessName(@ARGV);
 
 	if ($CONFIG{'state_file'}) {  #for now we are reprocessing old list
 		($list, $report) = LoadStateFile($CONFIG{'state_file'}, $databases);
@@ -659,7 +657,7 @@ sub main {
 }
 
 
-
+main;
 
 
 # --range "Mo-We 20:00-6:00"
