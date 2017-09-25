@@ -23,7 +23,7 @@ use warnings;
 use threads;
 use threads::shared;
 
-use Lib::Logger qw(DEBUG DEBUG2 ERROR);
+use Lib::Logger qw(DEBUG DEBUG2 ERROR PrintMsg);
 
 
 #GetColumns
@@ -68,7 +68,7 @@ sub GetPrimaryKey {
 	$sql .= " and cols.owner='$owner'" if ($owner);
 	$sql .= "order by ctype, constraint_name, position";
 
-	Logger::PrintMsg(DEBUG, $tag, $sql);
+	PrintMsg(DEBUG, $tag, $sql);
 
 	my $r = $dbh->selectall_arrayref($sql, { Slice => {} } );
 
@@ -87,7 +87,7 @@ sub GetPrimaryKey {
 				 #   or ($COLUMNS{$row->{COLUMN_NAME}}->{CPOSITON} != $row->{POSITION}) #compare if stored column is in the same position
 				 #   or ($COLUMNS{$row->{COLUMN_NAME}}->{CONSTRAINT_NAME} ne $row->{CONSTRAINT_NAME}) #compare if PK's name is the same
 				) {
-					Logger::PrintMsg(ERROR, $tag, "$table/$row->{COLUMN_NAME} PK constraint differs");
+					PrintMsg(ERROR, $tag, "$table/$row->{COLUMN_NAME} PK constraint differs");
 					return -1;
 				}
 
@@ -99,7 +99,7 @@ sub GetPrimaryKey {
 					#    or ($COLUMNS{$row->{COLUMN_NAME}}->{CPOSITON} != $row->{POSITION}) #compare position in constraint
 					#    or ($COLUMNS{$row->{COLUMN_NAME}}->{CONSTRAINT_NAME} ne $row->{CONSTRAINT_NAME}) #compare constraint name
 					) {
-						Logger::PrintMsg(Lib::Logger::ERROR, $tag, "$table/$row->{COLUMN_NAME} Uniqe constraint differs");
+						PrintMsg(ERROR, $tag, "$table/$row->{COLUMN_NAME} Uniqe constraint differs");
 						return -1;
 					}
 					$cname = $row->{CONSTRAINT_NAME};
@@ -136,21 +136,21 @@ sub GetPrimaryKey {
 
 
 	if ($u_found + $pk_found == 0) { #neither PK nor Uniqe
-		Logger::PrintMsg(ERROR, $tag, "There is neither PK nor Unique constraint enabled for table $table.");
+		PrintMsg(ERROR, $tag, "There is neither PK nor Unique constraint enabled for table $table.");
 		return -1;
 	}
 
 
 	if ($action == PK_CHECK_ONLY) { 
 
-		Logger::PrintMsg(DEBUG, $tag, "Constraint PK/U verified correctly");
+		PrintMsg(DEBUG, $tag, "Constraint PK/U verified correctly");
 
 	} else { #this is first worker to retrieve PK/UK information
 
 		my $str = "Columns for constraint $cname: ";
 		my @cols = sort { $columns->{$a}->{CPOSITON} <=> $columns->{$b}->{CPOSITON} } grep {defined $columns->{$_}->{CPOSITON}} keys %{$columns};
 		$str .= join(',', @cols);
-		Logger::PrintMsg(DEBUG, $tag, "$str $cname");
+		PrintMsg(DEBUG, $tag, "$str $cname");
 
 	}
 
@@ -179,12 +179,12 @@ sub GetColumns {
 	$sql .= "all_tab_columns where table_name='$table'";
 	$sql .= " and owner='$owner'" if ($owner);
 
-	Logger::PrintMsg(DEBUG, $sql);
+	PrintMsg(DEBUG, $sql);
 
 	my $r = $dbh->selectall_hashref($sql, 'COLUMN_ID');
 
 	if ( scalar(keys(%{$r})) == 0 ) {
-		Logger::PrintMsg(ERROR, $tag, "Cannot get columns for $table, do I have proper grants?\n");
+		PrintMsg(ERROR, $tag, "Cannot get columns for $table, do I have proper grants?\n");
 		return undef;
 	}
 
@@ -195,14 +195,14 @@ sub GetColumns {
 			$cn = $r->{$c}->{'COLUMN_NAME'};
 
 			if ( $checks > 0  && (not defined($columns->{$cn})) ) {
-				Logger::PrintMsg(ERROR, $tag, "Different tables, unexpected $cn column");
+				PrintMsg(ERROR, $tag, "Different tables, unexpected $cn column");
 				return -128;
 			}
 
 			if ( ($checks & CHECK_COLUMN_TYPE) &&
 			     ($columns->{$cn}->{'DATA_TYPE'} ne $r->{$c}->{'DATA_TYPE'}) ) {
 
-				Logger::PrintMsg(ERROR, $tag, "Data types for column $cn differs");
+				PrintMsg(ERROR, $tag, "Data types for column $cn differs");
 				return -1 * CHECK_COLUMN_TYPE;
 			}
 
@@ -210,18 +210,18 @@ sub GetColumns {
 			$n = 'Y' if (defined $columns->{$cn}->{'NULLABLE'});
 			if ( ($checks & CHECK_COLUMN_NULLABLE) && $r->{$c}->{'NULLABLE'} ne $n) {
 
-				Logger::PrintMsg(ERROR, $tag, "NULLABLE flag is inconsistnt for column $cn");
+				PrintMsg(ERROR, $tag, "NULLABLE flag is inconsistnt for column $cn");
 				return -1 * CHECK_COLUMN_NULLABLE;
 			}
 
 		}
 
 		if ( (scalar keys %{$r}) ne (scalar keys %{$columns}) ) {
-			Logger::PrintMsg(ERROR, $tag, "Different tables.");
+			PrintMsg(ERROR, $tag, "Different tables.");
                         return -128;
 		}
 
-		Logger::PrintMsg(DEBUG, $tag, "Columns verified correctly");
+		PrintMsg(DEBUG, $tag, "Columns verified correctly");
 
 		return GetPrimaryKey($columns, $dbh, $object, $tag, PK_CHECK_ONLY);
 
@@ -232,7 +232,7 @@ sub GetColumns {
 
 			if (is_shared($columns)) {
 				$columns->{$cn} = &share({});
-				Logger::PrintMsg(DEBUG2, $tag, "Sharing $cn hash ref.");
+				PrintMsg(DEBUG2, $tag, "Sharing $cn hash ref.");
 			}
 
 			$columns->{$cn}->{'COLUMN_ID'} = $c;
@@ -253,7 +253,7 @@ sub GetColumns {
 			$s .= ') ';
 		}
 
-		Logger::PrintMsg(DEBUG, $tag, $s);
+		PrintMsg(DEBUG, $tag, $s);
 
 		return GetPrimaryKey($columns, $dbh, $object, $tag, PK_DONT_CHECK);
 	}
@@ -406,7 +406,7 @@ sub Connect {
         my $dbh;
 
 	if (not defined($conn->{'pass'})) {
-		Logger::PrintMsg(ERROR, "$tag: no password given\n");
+		PrintMsg(ERROR, "$tag: no password given\n");
 		return undef;
 	}
 
@@ -414,14 +414,14 @@ sub Connect {
                 $conn->{'port'} = 1521;
         }
 
-	Logger::PrintMsg(DEBUG, "$tag: dbi:Oracle://$conn->{host}:$conn->{port}/$conn->{service} user: $conn->{user}\n");
+	PrintMsg(DEBUG, "$tag: dbi:Oracle://$conn->{host}:$conn->{port}/$conn->{service} user: $conn->{user}\n");
 	#  $dbh = DBI->connect('dbi:Oracle:host=foobar;sid=ORCL;port=1521;SERVER=POOLED', 'scott/tiger', '')
         $dbh = DBI->connect('dbi:Oracle://'.$conn->{'host'}.':'.$conn->{'port'}.'/'.$conn->{'service'}.':DEDICATED',
                             $conn->{'user'},
                             $conn->{'pass'});
 
 	if (not defined($dbh)) { 
-		Logger::PrintMsg(ERROR, "$DBI::errstr making connection \n");
+		PrintMsg(ERROR, "$DBI::errstr making connection \n");
 		return undef;
 	}
 

@@ -20,7 +20,6 @@
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 
-require 5.8.2;
 
 use strict;
 #use Cwd;
@@ -39,7 +38,7 @@ use IO::Handle;
 use IO::Pipe;
 
 my %CONFIG = (
-		'continue_only' => 1,
+		'continue_only' => 0,
 		'parallelism' => 4,
 		'sql_parallelism' => 1,
 		);
@@ -418,7 +417,7 @@ sub GetObjects {
 	my %objects_all;
 
 	foreach my $db (keys %{$dbs}) {
-		my $dbh = Database::Connect($dbs->{$db});
+		my $dbh = Lib::Database::Connect($dbs->{$db});
 
 		if (not defined($dbh)) {
 			PrintMsg(ERROR, "Connection failed to $db->{NAME}\n");
@@ -625,7 +624,7 @@ sub Terminate {
 }
 
 sub main {
-	my $report = {};
+	my $report;
 	my $databases;
 	my $list;
 	
@@ -642,16 +641,18 @@ sub main {
 		($list, $report) = LoadStateFile($CONFIG{'state_file'}, $databases);
 	}
 
+
 	CreatePidfile($CONFIG{'pid_file'});
 
-	if (not defined($list)) { #this is fresh start, no tables in statefile or no statefile
+	if (not defined($report)) { #this is fresh start, no tables in statefile or no statefile
 		if ($CONFIG{'continue_only'}) {
 			PrintMsg ERROR, "Stopping, This is fresh start and --continueonly flag enabled. (",POSIX::strftime('%y/%m/%d %H:%M:%S', localtime),")\n";
 			exit 0;
 		}
+		$report = {};
 		$list = GetObjects($databases, $list);
 	}
-
+print Dumper($list);
 #	CompareObjects($list, $report, $databases);
 
 }
