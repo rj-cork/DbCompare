@@ -43,7 +43,7 @@ my %CONFIG = (
 		'sql_parallelism' => 1,
 		);
 my %CHILDREN;
-my $SKIP_PARTS_ROW_LIMIT = Lib::Database::RESULT_BATCH_SIZE;
+my $SKIP_PARTS_ROW_LIMIT = 10000000;# Lib::Database::RESULT_BATCH_SIZE;
 
 # lib ======================================================================================================
 
@@ -354,7 +354,7 @@ sub GetObjectList {
 	my $table = shift;
 
 	my %list;
-	my $sql = "select t.owner,t.table_name,p.partition_name,p.high_value,p.partition_position,t.num_rows from all_tables t left join all_tab_partitions p on t.owner=p.table_owner and t.table_name=p.table_name where ";
+	my $sql = "select t.owner,t.table_name,p.partition_name,p.high_value,p.partition_position,t.num_rows t_num_rows,p.num_rows p_num_rows from all_tables t left join all_tab_partitions p on t.owner=p.table_owner and t.table_name=p.table_name where ";
 
 	$dbh->{LongReadLen} = 1000; # high_value is long
 #???		#when choosing partition using high value substract 1 second or less - 1/86400
@@ -388,12 +388,34 @@ sub GetObjectList {
 
 	my %slice;
 	my $r = $dbh->selectall_arrayref($sql, { Slice => \%slice } );
+	my $pk_columns = []; #table ref
+	my $processed_p = '';
+
 	foreach my $row (@{$r}) {
 		my $p = $row->{OWNER}.'.'.$row->{TABLE_NAME};
 
+		if ($p ne $processed_p) { #if table name is changed
+			$processed_p = $p; #store it
+			$pk_columns = []; #reset pk info 
+		}
+		# - if not defined ($row->{PARTITION_NAME}) then it is table without partitions
+		#	then
+		#		if defined $row->{T_NUM_ROWS} and $row->{T_NUM_ROWS} > $SKIP_PARTS_ROW_LIMIT
+		#			@pk=get_pk
+		#			do virtual partitioning by sample
+		#		else
+		#			add to list as normal table: $list{$p} = ''
+		#	else #with partitions
+		#		if defined $row->{P_NUM_ROWS} and $row->{P_NUM_ROWS} > $SKIP_PARTS_ROW_LIMIT
+		#			check high_value
+		#			do virtual subpartitioning by sample
+		#		else
+		#			check high_value
+		#			add to list
+		
 		#if (defined ($row->{PARTITION_NAME})) {
-		#switch to partitions only where $row->{NUM_ROWS}>$SKIP_PARTS_ROW_LIMIT 
-		if (defined ($row->{PARTITION_NAME}) && $row->{NUM_ROWS} > $SKIP_PARTS_ROW_LIMIT) {
+		#switch to partitions only where $row->{T_NUM_ROWS}>$SKIP_PARTS_ROW_LIMIT 
+		if (defined ($row->{PARTITION_NAME}) && $row->{T_NUM_ROWS} > $SKIP_PARTS_ROW_LIMIT) {
 			if (defined($row->{HIGH_VALUE})) {
 				$p .= '.'.$row->{PARTITION_POSITION};
 				$list{$p} = $row->{HIGH_VALUE}." - INTERVAL '1' SECOND";
@@ -402,6 +424,15 @@ sub GetObjectList {
 				$list{$p} = '';
 			}
 		} else {
+			if (scalar(@{$pk_columns}) == 0) {
+				my %columns;
+				my %object = ('owner'=>$row->{OWNER}, 'table'=>$row->{TABLE_NAME});
+				if (Lib::Database::GetPrimaryKey(\%columns, $dbh, \%object, 'GetObjectList',Lib::Database::PK_DONT_CHECK) < 0) {
+					exit 1;		
+				}
+				@{$pk_columns} = sort { $columns{$a}->{CPOSITON} <=> $columns{$b}->{CPOSITON} } grep {defined $columns{$_}->{CPOSITON}} keys %columns;
+				print STDERR Dumper ($pk_columns);
+			}
 			$list{$p} = '';
 		}
 
@@ -417,7 +448,7 @@ sub GetObjects {
 	my %objects_all;
 
 	foreach my $db (keys %{$dbs}) {
-		my $dbh = Lib::Database::Connect($dbs->{$db});
+		my $dbh = Lib::Database::Connect($dbs->{$db}, 'GetObjects');
 
 		if (not defined($dbh)) {
 			PrintMsg(ERROR, "Connection failed to $db->{NAME}\n");
@@ -427,7 +458,7 @@ sub GetObjects {
 		foreach my $o (@{$objects}) { #schema[.table[.partition]]
 			my $h_ref;
 
-				# $1 (obligatory) - schema, $2 (optional) - table, $3 (optional) - partition
+				# $1 (obligatory) - schema, $2 (optional) - table, TODO: $3 (optional) - partition
 			if ($o =~ /^([\w\d\?\*%]+)(?:\.([\w\d\$\?\*%]+))?$/) { 
 				$h_ref = GetObjectList($dbh, $1, $2);
 			} else {

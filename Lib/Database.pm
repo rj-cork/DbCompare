@@ -82,6 +82,7 @@ sub GetPrimaryKey {
 
 			if ($row->{CTYPE} eq 'P') { #constraint is PK
 				$pk_found = 1;
+				$cname = $row->{CONSTRAINT_NAME};
 
 				if (($columns->{$row->{COLUMN_NAME}}->{CONSTRAINT} ne 'P') #compare if stored column is in PK
 				 #   or ($COLUMNS{$row->{COLUMN_NAME}}->{CPOSITON} != $row->{POSITION}) #compare if stored column is in the same position
@@ -102,6 +103,7 @@ sub GetPrimaryKey {
 						PrintMsg(ERROR, $tag, "$table/$row->{COLUMN_NAME} Uniqe constraint differs");
 						return -1;
 					}
+
 					$cname = $row->{CONSTRAINT_NAME};
 					$u_found = 1;
 				}
@@ -118,7 +120,7 @@ sub GetPrimaryKey {
 				$columns->{$row->{COLUMN_NAME}}->{CONSTRAINT}='P';
 				$columns->{$row->{COLUMN_NAME}}->{CPOSITON}=$row->{POSITION};
 				$columns->{$row->{COLUMN_NAME}}->{CONSTRAINT_NAME}=$row->{CONSTRAINT_NAME};
-
+				$cname = $row->{CONSTRAINT_NAME};
 			} elsif ($pk_found == 0 and $row->{CTYPE} eq 'U') { #there is "order by ctype" so P will be always before U
 				#there was no PK captured before but we have Uniq
 				if ($u_found == 0 or $cname eq $row->{CONSTRAINT_NAME} ) {
