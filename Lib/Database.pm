@@ -45,6 +45,68 @@ use constant RESULT_BATCH_SIZE => 10000;
 use base 'Exporter';
 our @EXPORT_OK = qw(CHECK_COLUMN_TYPE CHECK_COLUMN_NULLABLE PK_CHECK_ONLY PK_DONT_CHECK COMPARE_USING_PK COMPARE_USING_COLUMN COMPARE_USING_SHA1 RESULT_BATCH_SIZE);
 
+#
+sub PreparePartitionLimits {
+
+$cols = ['VND_CD', 'FLT_NBR','SVC_STR_CTY_CD'];
+$rows = [['AA','2295','MIA'],['AA','2584','DFW'],['AM','0414','MTY'],['AM','0472','MEX']];
+#print Dumper(\@cols);
+#print Dumper(\@rows);
+$r_lo = undef;
+$r_hi = undef;
+for ($k=0;$k<=scalar(@{$rows});$k++) {
+        $r_hi = $rows->[$k] if ($k < scalar(@{$rows}));
+        print "LOW: ".join(',',@{$r_lo}),"\n" if ($r_lo);
+        print "HIGH: ".join(',',@{$r_hi}),"\n" if ($r_hi);
+
+        $s='';
+        if ($r_lo) {
+                $s.='(';
+                for ($i = 0; $i < scalar(@{$cols}); $i++) {
+                        $s.=') OR (' if ($i > 0);
+                        for ($j = 0; $j <= $i; $j++) {
+                                $s.=' AND ' if ($j > 0);
+                                if ($i==$j) {
+                                        if ($i == scalar(@{$cols}) - 1) {
+                                                $s .= $cols->[$j]." >= '".$r_lo->[$j]."'";
+                                        } else {
+                                                $s .= $cols->[$j]." > '".$r_lo->[$j]."'";
+                                        }
+                                } else {
+                                        $s .= $cols->[$j]." = '".$r_lo->[$j]."'";
+                                }
+                        }
+                }
+                $s.=')';
+        }
+        $s.="\nAND\n" if ($r_hi and $r_lo);
+        if ($r_hi) {
+                $s.='(';
+                for ($i = 0; $i < scalar(@{$cols}); $i++) {
+                        $s.=') OR (' if ($i > 0);
+                        for ($j = 0; $j <= $i; $j++) {
+                                $s.=' AND ' if ($j > 0);
+                                if ($i==$j) {
+                                        $s .= $cols->[$j]." < '".$r_hi->[$j]."'";
+                                } else {
+                                        $s .= $cols->[$j]." = '".$r_hi->[$j]."'";
+                                }
+                        }
+                }
+                $s.=')';
+        }
+        print $s,"\n";
+        print "-------------\n";
+        $r_lo = $r_hi;
+        $r_hi = undef;
+}
+
+}
+
+sub GetLogicalPartitions {
+	PreparePartitionLimits();	
+}
+
 # when modifing %{$columns} - $action=PK_DONT_CHECK - run in critical section!
 sub GetPrimaryKey {
 	my $columns = shift; #reference for 'columns' hash

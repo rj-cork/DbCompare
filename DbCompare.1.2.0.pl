@@ -424,6 +424,8 @@ sub GetObjectList {
 				$list{$p} = '';
 			}
 		} else {
+			if ($row->{T_NUM_ROWS} > $SKIP_PARTS_ROW_LIMIT) {
+			#logical partitioning
 			if (scalar(@{$pk_columns}) == 0) {
 				my %columns;
 				my %object = ('owner'=>$row->{OWNER}, 'table'=>$row->{TABLE_NAME});
@@ -433,7 +435,10 @@ sub GetObjectList {
 				@{$pk_columns} = sort { $columns{$a}->{CPOSITON} <=> $columns{$b}->{CPOSITON} } grep {defined $columns{$_}->{CPOSITON}} keys %columns;
 				print STDERR Dumper ($pk_columns);
 			}
-			$list{$p} = '';
+			... Lib::Database::GetLogicalPartitions
+			} else {
+				$list{$p} = '';
+			}
 		}
 
 		PrintMsg(DEBUG2, "GetObjectList(): table: $p ",($list{$p})?",part high val: $list{$p} \n":"\n");
