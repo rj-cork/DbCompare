@@ -426,16 +426,29 @@ sub GetObjectList {
 		} else {
 			if ($row->{T_NUM_ROWS} > $SKIP_PARTS_ROW_LIMIT) {
 			#logical partitioning
-			if (scalar(@{$pk_columns}) == 0) {
-				my %columns;
-				my %object = ('owner'=>$row->{OWNER}, 'table'=>$row->{TABLE_NAME});
-				if (Lib::Database::GetPrimaryKey(\%columns, $dbh, \%object, 'GetObjectList',Lib::Database::PK_DONT_CHECK) < 0) {
-					exit 1;		
+				if (scalar(@{$pk_columns}) == 0) {
+					my %columns;
+					my %object = ('owner'=>$row->{OWNER}, 'table'=>$row->{TABLE_NAME});
+					if (Lib::Database::GetPrimaryKey(\%columns, $dbh, \%object, 'GetObjectList',Lib::Database::PK_DONT_CHECK) < 0) {
+						exit 1;		
+					}
+					@{$pk_columns} = sort { $columns{$a}->{CPOSITON} <=> $columns{$b}->{CPOSITON} } grep {defined $columns{$_}->{CPOSITON}} keys %columns;
+					print STDERR Dumper ($pk_columns);
 				}
-				@{$pk_columns} = sort { $columns{$a}->{CPOSITON} <=> $columns{$b}->{CPOSITON} } grep {defined $columns{$_}->{CPOSITON}} keys %columns;
-				print STDERR Dumper ($pk_columns);
-			}
-			... Lib::Database::GetLogicalPartitions
+				my $object_rowcount = $row->{T_NUM_ROWS}; #or $row->{P_NUM_ROWS}
+				my $part_count = int($object_rowcount / $SKIP_PARTS_ROW_LIMIT + 1) #ceil($object_rowcount / $SKIP_PARTS_ROW_LIMIT)
+				my $new_partitions = Lib::Database::GetVirtualPartitions($dbh,
+											$pk_columns, 
+											$part_count/$object_rowcount, #estimated sample size
+											$row->{OWNER},
+											$row->{TABLE_NAME},
+											$list{$p});
+				#select SESSN_ID, LAST_UPDT_TM from pds_owner.sessn subpartition for (TO_DATE(' 2017-09-27 04:00:00', 'SYYYY-MM-DD HH24:MI:SS', 'NLS_CALENDAR=GREGORIAN') - INTERVAL '1' SECOND,'811a063b890a3d9f') sample (0.0002) order by 1,2;
+
+				for (my $vp = 0; $vp < scalar(@{$new_partitions}); $vp++ ) {
+					$list{$p.'.vp'.$vp} = $new_partitions->[$vp];
+				}
+
 			} else {
 				$list{$p} = '';
 			}

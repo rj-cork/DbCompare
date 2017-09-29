@@ -1,7 +1,7 @@
 package Lib::Database;
 
 # Database - functions for database operations
-# Version 1.21
+# Version 2.00.1
 # (C) 2016 - Radoslaw Karas <rj.cork@gmail.com>
 # 
 # This program is free software; you can redistribute it and/or modify
@@ -45,66 +45,112 @@ use constant RESULT_BATCH_SIZE => 10000;
 use base 'Exporter';
 our @EXPORT_OK = qw(CHECK_COLUMN_TYPE CHECK_COLUMN_NULLABLE PK_CHECK_ONLY PK_DONT_CHECK COMPARE_USING_PK COMPARE_USING_COLUMN COMPARE_USING_SHA1 RESULT_BATCH_SIZE);
 
-#
-sub PreparePartitionLimits {
+#function for virtual/logical table partitioning - creating 'where' predicates for each 'partition'
+sub PrepareVirtualPartitionPredicates {
+	my $columns = shift;	#ref to table with columns used for partitioning
+	my $rows = shift;	#ref to rows witn boundary values for partitioning - already sorted ascending by all columns
+	my $res;
 
-$cols = ['VND_CD', 'FLT_NBR','SVC_STR_CTY_CD'];
-$rows = [['AA','2295','MIA'],['AA','2584','DFW'],['AM','0414','MTY'],['AM','0472','MEX']];
-#print Dumper(\@cols);
-#print Dumper(\@rows);
-$r_lo = undef;
-$r_hi = undef;
-for ($k=0;$k<=scalar(@{$rows});$k++) {
-        $r_hi = $rows->[$k] if ($k < scalar(@{$rows}));
-        print "LOW: ".join(',',@{$r_lo}),"\n" if ($r_lo);
-        print "HIGH: ".join(',',@{$r_hi}),"\n" if ($r_hi);
+	#$cols = ['VND_CD', 'FLT_NBR','SVC_STR_CTY_CD'];
+	#$rows = [['AA','2584','DFW'],['AM','0414','MTY']]; 
 
-        $s='';
-        if ($r_lo) {
-                $s.='(';
-                for ($i = 0; $i < scalar(@{$cols}); $i++) {
-                        $s.=') OR (' if ($i > 0);
-                        for ($j = 0; $j <= $i; $j++) {
-                                $s.=' AND ' if ($j > 0);
-                                if ($i==$j) {
-                                        if ($i == scalar(@{$cols}) - 1) {
-                                                $s .= $cols->[$j]." >= '".$r_lo->[$j]."'";
-                                        } else {
-                                                $s .= $cols->[$j]." > '".$r_lo->[$j]."'";
-                                        }
-                                } else {
-                                        $s .= $cols->[$j]." = '".$r_lo->[$j]."'";
-                                }
-                        }
-                }
-                $s.=')';
-        }
-        $s.="\nAND\n" if ($r_hi and $r_lo);
-        if ($r_hi) {
-                $s.='(';
-                for ($i = 0; $i < scalar(@{$cols}); $i++) {
-                        $s.=') OR (' if ($i > 0);
-                        for ($j = 0; $j <= $i; $j++) {
-                                $s.=' AND ' if ($j > 0);
-                                if ($i==$j) {
-                                        $s .= $cols->[$j]." < '".$r_hi->[$j]."'";
-                                } else {
-                                        $s .= $cols->[$j]." = '".$r_hi->[$j]."'";
-                                }
-                        }
-                }
-                $s.=')';
-        }
-        print $s,"\n";
-        print "-------------\n";
-        $r_lo = $r_hi;
-        $r_hi = undef;
+	#$res = [ "(VND_CD < 'AA') OR (VND_CD = 'AA' AND FLT_NBR < '2584') OR (VND_CD = 'AA' AND FLT_NBR = '2584' AND SVC_STR_CTY_CD < 'DFW')",
+	#	  "(VND_CD > 'AA') OR (VND_CD = 'AA' AND FLT_NBR > '2584') OR (VND_CD = 'AA' AND FLT_NBR = '2584' AND SVC_STR_CTY_CD >= 'DFW') AND (VND_CD < 'AM') OR (VND_CD = 'AM' AND FLT_NBR < '0414') OR (VND_CD = 'AM' AND FLT_NBR = '0414' AND SVC_STR_CTY_CD < 'MTY')",
+	#	  "(VND_CD > 'AM') OR (VND_CD = 'AM' AND FLT_NBR > '0414') OR (VND_CD = 'AM' AND FLT_NBR = '0414' AND SVC_STR_CTY_CD >= 'MTY')" ];
+
+	#	TODO: could be: "(VND_CD < :1) OR (VND_CD = :1 AND FLT_NBR < :2) OR (VND_CD = :1 AND FLT_NBR = :2 AND SVC_STR_CTY_CD < :3)"
+	
+
+	#print Dumper(\@cols);
+	#print Dumper(\@rows);
+	my $r_lo = undef; #lower boundary record
+	my $r_hi = undef; #higher boundary record
+	my ($i, $j, $k, $s);	
+
+	for ($k = 0; $k <= scalar(@{$rows}); $k++) {
+
+	        $r_hi = $rows->[$k] if ($k < scalar(@{$rows})); #next/first row becomes new high boundary
+
+		PrintMsg(DEBUG3, "Virtual partitions. LOW BOUNDARY: ".join(',',@{$r_lo})."\n") if ($r_lo);
+		PrintMsg(DEBUG3, "Virtual partitions. HIGH BOUNDARY: ".join(',',@{$r_hi})."\n") if ($r_hi);
+	
+	        $s = '';
+	        if ($r_lo) {
+	                $s .= '(';
+	                for ($i = 0; $i < scalar(@{$cols}); $i++) {
+	                        $s .= ') OR (' if ($i > 0);
+	                        for ($j = 0; $j <= $i; $j++) {
+	                                $s .= ' AND ' if ($j > 0);
+	                                if ($i == $j) {
+	                                        if ($i == scalar(@{$cols}) - 1) {
+	                                                $s .= $cols->[$j]." >= '".$r_lo->[$j]."'";
+	                                        } else {
+	                                                $s .= $cols->[$j]." > '".$r_lo->[$j]."'";
+	                                        }
+	                                } else {
+	                                        $s .= $cols->[$j]." = '".$r_lo->[$j]."'";
+	                                }
+	                        }
+	                }
+	                $s .= ')';
+	        }
+
+	        $s .= "\nAND\n" if ($r_hi and $r_lo);
+
+	        if ($r_hi) {
+	                $s .= '(';
+	                for ($i = 0; $i < scalar(@{$cols}); $i++) {
+	                        $s .= ') OR (' if ($i > 0);
+	                        for ($j = 0; $j <= $i; $j++) {
+	                                $s .= ' AND ' if ($j > 0);
+	                                if ($i == $j) {
+	                                        $s .= $cols->[$j]." < '".$r_hi->[$j]."'";
+	                                } else {
+	                                        $s .= $cols->[$j]." = '".$r_hi->[$j]."'";
+	                                }
+	                        }
+	                }
+	                $s .= ')';
+	        }
+		
+	        $r_lo = $r_hi; #high boundary becomes lower boundary
+	        $r_hi = undef; #no new high boundary, will be set in next loop iteration if exists
+
+		push @{$res}, $s; #add new string to results table
+		PrintMsg(DEBUG3, "Virtual partitions. Predicates: $s\n");
+	}
+
+	return $res;
 }
 
-}
 
-sub GetLogicalPartitions {
-	PreparePartitionLimits();	
+#GetVirtualPartitions samples given table with query like:
+#select ID, UPDT_TM from data_owner.table subpartition for (TO_DATE(' 2017-09-27 04:00:00', 'SYYYY-MM-DD HH24:MI:SS') - INTERVAL '1' SECOND,'811a063b890a3d9f') sample (0.0002) order by 1,2;
+sub GetVirtualPartitions {
+	my $dbh = shift;
+	my $pk_columns = shift;
+	my $sample = shift;
+	my $owner = shift;
+	my $table = shift;
+	my $partition = shift;
+	my $sql = 'select ';
+
+	$sample = 0.000001 if ($sample < 0.000001); #Oracle's min probability for printing row in sample statement is 1/100 mln
+
+	$sql .= join(',', @{$pk_columns});
+	$sql .= "from $owner.$table $partition sample($sample) order by ";
+	$sql .= join(",", map {$_+1} keys @{$pk_columns});
+
+
+	PrintMsg(DEBUG3, "Virtual partitions. Sampling query: $sql\n");
+	
+	my $r = $dbh->selectall_arrayref($sql);
+	
+	#print Dumper($r);
+
+	$r = PrepareVirtualPartitionPredicates($pk_columns, $r);
+
+	return $r;
 }
 
 # when modifing %{$columns} - $action=PK_DONT_CHECK - run in critical section!
