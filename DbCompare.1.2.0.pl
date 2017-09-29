@@ -388,11 +388,13 @@ sub GetObjectList {
 
 	my %slice;
 	my $r = $dbh->selectall_arrayref($sql, { Slice => \%slice } );
-	my $pk_columns = []; #table ref
+	my $pk_cols = []; #table ref
 	my $processed_p = '';
 
 	foreach my $row (@{$r}) {
+		my %cols;
 		my $p = $row->{OWNER}.'.'.$row->{TABLE_NAME};
+		my %obj = ('owner' => $row->{OWNER}, 'table' => $row->{TABLE_NAME}); #for Lib::Database::GetPrimaryKey
 
 		if ($p ne $processed_p) { #if table name is changed
 			$processed_p = $p; #store it
@@ -414,48 +416,45 @@ sub GetObjectList {
 		#		else
 		#			add to list
 		
-		#if (defined ($row->{PARTITION_NAME})) {
-		#switch to partitions only where $row->{T_NUM_ROWS}>$SKIP_PARTS_ROW_LIMIT 
-		if (defined ($row->{PARTITION_NAME}) && $row->{T_NUM_ROWS} > $SKIP_PARTS_ROW_LIMIT) {
+		if (not defined ($row->{PARTITION_NAME})) {
+			$list{$p} = '';
+		} else { #partitions are here
 			if (defined($row->{HIGH_VALUE})) {
-				$p .= '.'.$row->{PARTITION_POSITION};
-				$list{$p} = $row->{HIGH_VALUE}." - INTERVAL '1' SECOND";
+				$p .= '.'.$row->{PARTITION_POSITION}; #high_value as partition name is poor idea
+
+				#partition for (TIMESTAMP' 2017-09-27 04:00:00' - INTERVAL '1' SECOND)
+				$list{$p} = 'partition for ('.$row->{HIGH_VALUE}." - INTERVAL '1' SECOND)";
 			} else {
 				$p .= '.'.$row->{PARTITION_NAME};
-				$list{$p} = '';
+				$list{$p} = 'partition ('.$row->{PARTITION_NAME}.')';
 			}
-		} else {
-			if ($row->{T_NUM_ROWS} > $SKIP_PARTS_ROW_LIMIT) {
-			#logical partitioning
-				if (scalar(@{$pk_columns}) == 0) {
-					my %columns;
-					my %object = ('owner'=>$row->{OWNER}, 'table'=>$row->{TABLE_NAME});
-					if (Lib::Database::GetPrimaryKey(\%columns, $dbh, \%object, 'GetObjectList',Lib::Database::PK_DONT_CHECK) < 0) {
+
+			if (defined($row->{P_NUM_ROWS}) && $row->{P_NUM_ROWS} > $SKIP_PARTS_ROW_LIMIT) {
+			#partition too big, need to split it
+
+				if (scalar(@{$pk_cols}) == 0) {
+					if (Lib::Database::GetPrimaryKey(\%cols, $dbh, %obj, 'GetObjectList',Lib::Database::PK_DONT_CHECK) < 0) {
 						exit 1;		
 					}
-					@{$pk_columns} = sort { $columns{$a}->{CPOSITON} <=> $columns{$b}->{CPOSITON} } grep {defined $columns{$_}->{CPOSITON}} keys %columns;
-					print STDERR Dumper ($pk_columns);
+					@{$pk_cols} = sort { $cols{$a}->{CPOSITON} <=> $cols{$b}->{CPOSITON} } grep {defined $cols{$_}->{CPOSITON}} keys %cols;
 				}
-				my $object_rowcount = $row->{T_NUM_ROWS}; #or $row->{P_NUM_ROWS}
-				my $part_count = int($object_rowcount / $SKIP_PARTS_ROW_LIMIT + 1) #ceil($object_rowcount / $SKIP_PARTS_ROW_LIMIT)
-				my $new_partitions = Lib::Database::GetVirtualPartitions($dbh,
+				my $object_rowcount = $row->{P_NUM_ROWS}; 
+				my $vpart_count = int($object_rowcount / $SKIP_PARTS_ROW_LIMIT + 1) #ceil($object_rowcount / $SKIP_PARTS_ROW_LIMIT)
+				my $new_vparts = Lib::Database::GetVirtualPartitions($dbh,
 											$pk_columns, 
-											$part_count/$object_rowcount, #estimated sample size
+											$vpart_count/$object_rowcount, #estimated sample size
 											$row->{OWNER},
 											$row->{TABLE_NAME},
 											$list{$p});
-				#select SESSN_ID, LAST_UPDT_TM from pds_owner.sessn subpartition for (TO_DATE(' 2017-09-27 04:00:00', 'SYYYY-MM-DD HH24:MI:SS', 'NLS_CALENDAR=GREGORIAN') - INTERVAL '1' SECOND,'811a063b890a3d9f') sample (0.0002) order by 1,2;
 
-				for (my $vp = 0; $vp < scalar(@{$new_partitions}); $vp++ ) {
-					$list{$p.'.vp'.$vp} = $new_partitions->[$vp];
+				for (my $vp = 0; $vp < scalar(@{$new_vparts}); $vp++ ) {
+					$list{$p.'.vp'.$vp} = $new_vparts->[$vp];
 				}
 
-			} else {
-				$list{$p} = '';
-			}
+			} 
 		}
 
-		PrintMsg(DEBUG2, "GetObjectList(): table: $p ",($list{$p})?",part high val: $list{$p} \n":"\n");
+#		PrintMsg(DEBUG2, "GetObjectList(): table: $p ",($list{$p})?",part high val: $list{$p} \n":"\n");
 	}
 
 	return \%list;

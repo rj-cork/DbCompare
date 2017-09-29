@@ -23,7 +23,7 @@ use warnings;
 use threads;
 use threads::shared;
 
-use Lib::Logger qw(DEBUG DEBUG2 ERROR PrintMsg);
+use Lib::Logger qw(DEBUG DEBUG2 DEBUG3 ERROR PrintMsg);
 
 
 #GetColumns
@@ -47,7 +47,7 @@ our @EXPORT_OK = qw(CHECK_COLUMN_TYPE CHECK_COLUMN_NULLABLE PK_CHECK_ONLY PK_DON
 
 #function for virtual/logical table partitioning - creating 'where' predicates for each 'partition'
 sub PrepareVirtualPartitionPredicates {
-	my $columns = shift;	#ref to table with columns used for partitioning
+	my $cols = shift;	#ref to table with columns used for partitioning
 	my $rows = shift;	#ref to rows witn boundary values for partitioning - already sorted ascending by all columns
 	my $res;
 
