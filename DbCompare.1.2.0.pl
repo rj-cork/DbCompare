@@ -399,18 +399,19 @@ sub GetObjectList {
 			$pk_columns = []; #reset pk info 
 		}
 		# - if not defined ($row->{PARTITION_NAME}) then it is table without partitions
-		#	then
+		#	then 	#table w/o partitions
 		#		if defined $row->{T_NUM_ROWS} and $row->{T_NUM_ROWS} > $SKIP_PARTS_ROW_LIMIT
+		#			#statistics show that it is too big to run in one pass
 		#			@pk=get_pk
 		#			do virtual partitioning by sample
-		#		else
+		#		else #no stats or table is small
 		#			add to list as normal table: $list{$p} = ''
 		#	else #with partitions
+		#		check high_value
 		#		if defined $row->{P_NUM_ROWS} and $row->{P_NUM_ROWS} > $SKIP_PARTS_ROW_LIMIT
-		#			check high_value
+		#			#statistics show that this partition is too big to run in one pass
 		#			do virtual subpartitioning by sample
 		#		else
-		#			check high_value
 		#			add to list
 		
 		#if (defined ($row->{PARTITION_NAME})) {
