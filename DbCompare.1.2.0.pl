@@ -43,7 +43,7 @@ my %CONFIG = (
 		'sql_parallelism' => 1,
 		);
 my %CHILDREN;
-my $SKIP_PARTS_ROW_LIMIT = 10000000;# Lib::Database::RESULT_BATCH_SIZE;
+my $SKIP_PARTS_ROW_LIMIT = 10000;# Lib::Database::RESULT_BATCH_SIZE*1000;
 
 # lib ======================================================================================================
 
@@ -398,7 +398,7 @@ sub GetObjectList {
 
 		if ($p ne $processed_p) { #if table name is changed
 			$processed_p = $p; #store it
-			$pk_columns = []; #reset pk info 
+			$pk_cols = []; #reset pk info 
 		}
 		# - if not defined ($row->{PARTITION_NAME}) then it is table without partitions
 		#	then 	#table w/o partitions
@@ -417,8 +417,35 @@ sub GetObjectList {
 		#			add to list
 		
 		if (not defined ($row->{PARTITION_NAME})) {
-			$list{$p} = '';
+
+			if (defined($row->{T_NUM_ROWS}) && $row->{T_NUM_ROWS} > $SKIP_PARTS_ROW_LIMIT) {
+			#table too big, need to split it
+			#TODO: generated only for DB0 / basedb, rest has copy of predicates from db0
+				if (scalar(@{$pk_cols}) == 0) {
+					if (Lib::Database::GetPrimaryKey(\%cols, $dbh, \%obj, 'GetObjectList',Lib::Database::PK_DONT_CHECK) < 0) {
+						exit 1;		
+					}
+					@{$pk_cols} = sort { $cols{$a}->{CPOSITON} <=> $cols{$b}->{CPOSITON} } grep {defined $cols{$_}->{CPOSITON}} keys %cols;
+				}
+				my $object_rowcount = $row->{T_NUM_ROWS}; 
+				my $vpart_count = int($object_rowcount / $SKIP_PARTS_ROW_LIMIT + 1); #ceil($object_rowcount / $SKIP_PARTS_ROW_LIMIT)
+				my $new_vparts = Lib::Database::GetVirtualPartitions($dbh,
+											$pk_cols, 
+											$vpart_count/$object_rowcount, #estimated sample size
+											$row->{OWNER},
+											$row->{TABLE_NAME},
+											$list{$p});
+
+				for (my $vp = 0; $vp < scalar(@{$new_vparts}); $vp++ ) {
+					$list{$p.'.vp'.$vp} = $new_vparts->[$vp];
+				}
+
+			} else {
+				$list{$p} = '';
+			}
+
 		} else { #partitions are here
+			#TODO: handle different number/order of partitions
 			if (defined($row->{HIGH_VALUE})) {
 				$p .= '.'.$row->{PARTITION_POSITION}; #high_value as partition name is poor idea
 
@@ -433,15 +460,15 @@ sub GetObjectList {
 			#partition too big, need to split it
 
 				if (scalar(@{$pk_cols}) == 0) {
-					if (Lib::Database::GetPrimaryKey(\%cols, $dbh, %obj, 'GetObjectList',Lib::Database::PK_DONT_CHECK) < 0) {
+					if (Lib::Database::GetPrimaryKey(\%cols, $dbh, \%obj, 'GetObjectList',Lib::Database::PK_DONT_CHECK) < 0) {
 						exit 1;		
 					}
 					@{$pk_cols} = sort { $cols{$a}->{CPOSITON} <=> $cols{$b}->{CPOSITON} } grep {defined $cols{$_}->{CPOSITON}} keys %cols;
 				}
 				my $object_rowcount = $row->{P_NUM_ROWS}; 
-				my $vpart_count = int($object_rowcount / $SKIP_PARTS_ROW_LIMIT + 1) #ceil($object_rowcount / $SKIP_PARTS_ROW_LIMIT)
+				my $vpart_count = int($object_rowcount / $SKIP_PARTS_ROW_LIMIT + 1); #ceil($object_rowcount / $SKIP_PARTS_ROW_LIMIT)
 				my $new_vparts = Lib::Database::GetVirtualPartitions($dbh,
-											$pk_columns, 
+											$pk_cols, 
 											$vpart_count/$object_rowcount, #estimated sample size
 											$row->{OWNER},
 											$row->{TABLE_NAME},

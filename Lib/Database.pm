@@ -71,8 +71,8 @@ sub PrepareVirtualPartitionPredicates {
 
 	        $r_hi = $rows->[$k] if ($k < scalar(@{$rows})); #next/first row becomes new high boundary
 
-		PrintMsg(DEBUG3, "Virtual partitions. LOW BOUNDARY: ".join(',',@{$r_lo})."\n") if ($r_lo);
-		PrintMsg(DEBUG3, "Virtual partitions. HIGH BOUNDARY: ".join(',',@{$r_hi})."\n") if ($r_hi);
+		PrintMsg(ERROR, "Virtual partitions. LOW BOUNDARY: ".join(',',@{$r_lo})."\n") if ($r_lo);
+		PrintMsg(ERROR, "Virtual partitions. HIGH BOUNDARY: ".join(',',@{$r_hi})."\n") if ($r_hi);
 	
 	        $s = '';
 	        if ($r_lo) {
@@ -118,6 +118,7 @@ sub PrepareVirtualPartitionPredicates {
 
 		push @{$res}, $s; #add new string to results table
 		PrintMsg(DEBUG3, "Virtual partitions. Predicates: $s\n");
+		PrintMsg(ERROR, "Virtual partitions. Predicates: $s\n");
 	}
 
 	return $res;
@@ -135,14 +136,17 @@ sub GetVirtualPartitions {
 	my $partition = shift;
 	my $sql = 'select ';
 
-	$sample = 0.000001 if ($sample < 0.000001); #Oracle's min probability for printing row in sample statement is 1/100 mln
+	$sample = int($sample*1000000+0.5)/1000000;
+	$sample = 0.000001 if ($sample < 0.000001); #Oracle's min probability (in %) for printing row in sample statement is 1/100 mln
+	$partition = '' if (not defined($partition));
 
 	$sql .= join(',', @{$pk_columns});
-	$sql .= "from $owner.$table $partition sample($sample) order by ";
+	$sql .= " from $owner.$table $partition sample($sample) order by ";
 	$sql .= join(",", map {$_+1} keys @{$pk_columns});
 
 
 	PrintMsg(DEBUG3, "Virtual partitions. Sampling query: $sql\n");
+	PrintMsg(ERROR, "Virtual partitions. Sampling query: $sql\n");
 	
 	my $r = $dbh->selectall_arrayref($sql);
 	
@@ -167,7 +171,7 @@ sub GetPrimaryKey {
 	my $sql;
 
 	$owner = $object->{owner} if($object->{owner});
-	$table = $object->{table};
+	$table = $object->{table} if($object->{table});
 	$tag = '' if (!defined($tag));
 
 	$sql = "SELECT cols.table_name, cols.column_name, cons.status, cons.owner,cons.constraint_type ctype,cols.constraint_name,cols.position ";
