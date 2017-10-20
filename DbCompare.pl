@@ -31,6 +31,7 @@ use Storable;
 use Data::Dumper;
 use Getopt::Long;
 use Pod::Usage;
+use Pod::Text;
 use POSIX qw(strftime :sys_wait_h :signal_h);
 use IO::Select;
 use IO::Handle;
@@ -167,9 +168,7 @@ sub GetParams {
 	    'help|h' => \$help) or $help=100;
 
 	if ($help) {
-               # pod2usage(1);
-                pod2usage( -verbose => 2, -exitval => 1, -output  => \*STDOUT);
-                exit 0;
+                pod2usage(-input => ((caller())[1]), -verbose => 2, -noperldoc => 1, -exitval => 1, -output  => \*STDOUT);
         }
 
 	if (scalar(@dbs) < 2) {

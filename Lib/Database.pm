@@ -141,7 +141,7 @@ sub GetVirtualPartitions {
 	$partition = '' if (not defined($partition));
 
 	$sql .= join(',', @{$pk_columns});
-	$sql .= " from $owner.$table $partition sample($sample) order by ";
+	$sql .= " from $owner.$table $partition sample(".sprintf("%.6f",$sample).") order by ";
 	$sql .= join(",", map {$_+1} keys @{$pk_columns});
 
 
