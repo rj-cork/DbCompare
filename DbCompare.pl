@@ -2,7 +2,7 @@
 
 # DataCompare.pl - script and manual for comparing data in multiple 
 #		   schemas/tables across multiple databases
-# Version 1.10
+# Version 1.11
 # (C) 2016 - Radoslaw Karas <rj.cork@gmail.com>
 # 
 # This program is free software; you can redistribute it and/or modify
@@ -168,10 +168,13 @@ sub GetParams {
 	    'help|h' => \$help) or $help=100;
 
 	if ($help) {
-                pod2usage(-input => ((caller())[1]), -verbose => 2, -noperldoc => 1, -exitval => 1, -output  => \*STDOUT);
+		#print STDERR ">",Cwd::abs_path($0),"|",$0,">",`pwd`,"+",((caller())[1]),"\n";
+                #pod2usage(-input => 'script/DbCompare.pl' , -verbose => 2, -noperldoc => 1, -exitval => 1, -output  => \*STDOUT);
+                pod2usage( -verbose => 2, -noperldoc => 1, -exitval => 1, -output  => \*STDOUT);
+                #pod2usage(-input => ((caller())[1]), -verbose => 2, -noperldoc => 1, -exitval => 1, -output  => \*STDOUT);
         }
 
-	if (scalar(@dbs) < 2) {
+	if ((defined($basedb) && scalar(@dbs) == 0) || (!defined($basedb) && scalar(@dbs) < 2)) {
 		PrintMsg ERROR, "GetParams(): At least 2 database connections are needed.\n";
 		exit 1;
 	}
@@ -733,7 +736,9 @@ sub RemapAllTables {
 			my ($dbalias,$from,$to) = ($1,$2,$3);
 			my ($from_sch,$from_tab,$from_par,$to_sch,$to_tab,$to_par);
 
-			if (defined($dbalias) && not defined($table_list->{$dbalias})) {
+			$dbalias = uc($dbalias) if (defined($dbalias));
+			if (defined($dbalias) && not defined($DATABASES{$dbalias})) {
+			#if (defined($dbalias) && not defined($table_list->{$dbalias})) {
 				PrintMsg ERROR, "RemapAllTables(): Invalid dbalias $dbalias in $m remap caluse\n";
 				exit 1;
 			}
@@ -755,13 +760,15 @@ sub RemapAllTables {
 
 			#empty/undef value means all 
 			#print "$dba, $schema, $table, $partition\n";
-			foreach my $db (sort keys %{$table_list}) {
+			foreach my $db (sort keys %DATABASES) {
 				next if (defined($dbalias) and $db ne $dbalias); #skip other databases if dbalias is given for the remap 
 
 				if (!defined($dbalias) && $db ne $BASEDB) { #dbalias is not defined, process every db except PRIMARY/BASEDB
-					$mappings += RemapTables($table_list->{$db}, $from_sch,$from_tab,$from_par, $to_sch,$to_tab,$to_par, $db);
+					$mappings += RemapTables($table_list->{$BASEDB}, $from_sch,$from_tab,$from_par, $to_sch,$to_tab,$to_par, $db);
+					#$mappings += RemapTables($table_list->{$db}, $from_sch,$from_tab,$from_par, $to_sch,$to_tab,$to_par, $db);
 				} elsif (defined($dbalias)) { #dbalias is defined for this exclude
-					$mappings += RemapTables($table_list->{$dbalias}, $from_sch,$from_tab,$from_par, $to_sch,$to_tab,$to_par, $dbalias);
+					$mappings += RemapTables($table_list->{$BASEDB}, $from_sch,$from_tab,$from_par, $to_sch,$to_tab,$to_par, $dbalias);
+					#$mappings += RemapTables($table_list->{$dbalias}, $from_sch,$from_tab,$from_par, $to_sch,$to_tab,$to_par, $dbalias);
 				}
 			}
 		} else {
@@ -1571,8 +1578,8 @@ $| = 1; #no buffering on stdout
 $SIG{INT} = \&Terminate;
 $SIG{TERM} = \&Terminate;
 
-SetProcessName(@ARGV);
 GetParams();
+SetProcessName(@ARGV);
 
 if (VerifyTime(@TIME_RANGES) == 0) {
 	PrintMsg ERROR, "Stopping, I'm outside available time slots. (",POSIX::strftime('%y/%m/%d %H:%M:%S', localtime),")\n";
