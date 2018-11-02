@@ -425,7 +425,7 @@ sub GetObjectList {
 			#table too big, need to split it
 
 			#generated only for DB0 / basedb, rest will use the same predicates.
-	print STDERR ">$dbname>",$row->{T_NUM_ROWS},"\n";
+#	print STDERR ">$dbname>",$row->{T_NUM_ROWS},"\n";
 				next if ($dbname ne $CONFIG{'base_db'}); #shouldnt happen
 
 				if (scalar(@{$pk_cols}) == 0) {
@@ -436,7 +436,7 @@ sub GetObjectList {
 				}
 				my $object_rowcount = $row->{T_NUM_ROWS}; 
 				my $vpart_count = int($object_rowcount / $SKIP_PARTS_ROW_LIMIT + 1); #ceil($object_rowcount / $SKIP_PARTS_ROW_LIMIT)
-	print STDERR ">",$vpart_count/$object_rowcount,"\n";
+#	print STDERR ">",$vpart_count/$object_rowcount,"\n";
 				my $new_vparts = Lib::Database::GetVirtualPartitions($dbh,
 											$pk_cols, 
 											$vpart_count/$object_rowcount*100, #estimated sample size in percents
@@ -444,7 +444,7 @@ sub GetObjectList {
 											$row->{TABLE_NAME},
 											undef);
 
-	print STDERR Dumper($new_vparts);
+#	print STDERR Dumper($new_vparts);
 				for (my $vp = 0; $vp < scalar(@{$new_vparts}); $vp++ ) {
 					my %h;
 					$h{PNAME} = undef; #not real partition
@@ -469,7 +469,7 @@ sub GetObjectList {
 			#}
 			$p = 'partition ('.$row->{PARTITION_NAME}.')';
 
-	print STDERR ">$dbname>",$row->{P_NUM_ROWS}," -- $p\n";
+#	print STDERR ">$dbname>",$row->{P_NUM_ROWS}," -- $p\n";
 			if (defined($row->{P_NUM_ROWS}) && $row->{P_NUM_ROWS} > $SKIP_PARTS_ROW_LIMIT) {
 			#partition too big, need to split it
 
@@ -560,8 +560,118 @@ sub GetObjects {
 
 	return \%objects_all;
 }
-# ======================================================================================================
 
+
+sub MakeObjectsList {
+	my $objectlist = shift;
+	my @ret;
+
+	foreach my $schema_name (sort keys %{$objectlist->{$base_db}}) {
+
+		my $schema_ref = $objectlist->{$base_db}->{$schema_name};
+		next if (ref($schema_ref) eq 'SCALAR'); # skip scalar values
+
+		foreach my $table_name (sort keys %{$schema_ref}) {
+
+			my $table_ref = $schema_ref->{$table_name};
+			if (ref($table_ref) eq 'SCALAR') { #NAME or something which is not ref to partition list
+				push @ret, {SCHEMA=>$schema_name, TABLE=>$table_name};
+				next;
+			}
+
+			# else 
+			foreach my $partition_name (sort keys %{$table_ref}) {
+	
+				my $partition_ref = $table_ref->{$partition_name};
+	                        if (ref($partition_ref) eq 'SCALAR') { #PNAME or something which is not ref to partition list
+					push @ret, {SCHEMA=>$schema_name, TABLE=>$table_name, PARTITION=>$partition_name};
+					next;
+				}
+
+				#else
+				foreach my $subpartition_name (sort keys %{$partition_ref}) {
+	
+					push @ret, {SCHEMA=>$schema_name, TABLE=>$table_name, PARTITION=>$partition_name, SUBPARTITION=>$subpartition_name};
+
+				}
+
+			}
+
+		}
+
+	}
+	return \@ret;
+}
+
+sub CompareObjects {
+	my ($objectlist, $report, $dbs) = @_;
+
+	my $marker_tm = time; #we will recognize which results are from actual run and which are loaded from state file
+        my $selector = IO::Select->new();
+        my $terminate = 0;
+	my $base_db = $CONFIG{'base_db'};
+
+	my $objects_arr = MakeObjectsList($objectlist);
+	my %processed_objects; #hash with key = index of object being processed, value = pid when processing. '' when processed
+	
+	while (1) {
+		my $next_object;
+		my $active_objects = 0;
+		for ($next_object=0; $next_objext<scalar(@{$objects_arr}); $next_object++) {
+			if (not defined $processed_objects{$next_object}) { #if not marked as being processed or processed
+				last;
+			} elsif ( $processed_objects{$next_object} ne '') { #if marked as being processed
+				$active_objects++;
+			}
+		}
+
+		if ($next_object == scalar(@{$objects_arr}) && $active_objects == 0) {
+			print STDERR "no more to process\n";
+                        last;
+		}
+
+                if (VerifyTime(@TIME_RANGES) == 0) {
+                        PrintMsg ERROR, "Stopping, I'm outside available time slots. (",POSIX::strftime('%y/%m/%d %H:%M:%S', localtime),")\n";
+                        last;
+                }
+
+		if ($next_object < scalar(@{$objects_arr})) {
+
+	                PrintMsg "\nProcessing $table_name ",POSIX::strftime('%y/%m/%d %H:%M:%S', localtime),"\n";
+
+        	        if ($TEST_ONLY) {
+				 $processed_tables{$next_object} = '';
+	                         next;
+	                }
+
+			#my @args = PrepareArgs($dbs, $table_list, $table_name);
+
+                        #$selector->add(SpawnNewProcess(\@args, $table_name, \%processed_tables));
+                        $selector->add(SpawnNewProcess($objectlist, $next_object, \%processed_objects));
+
+		}
+
+	}
+#VAR1 = {
+#    'DB0' => {
+#      'TRP_OWNER' => {
+#           'PNRP_MSG_LOG' => {
+#                'SYS_P49565' => {
+#                   'PARTITION_POSITION' => '3',
+#                   'PNAME' => 'SYS_P49565',
+#                   'HIGH_VALUE' => 'TO_DATE(\' 2017-01-11 00:00:00\', \'SYYYY-MM-DD HH24:MI:SS\', \'NLS_CALENDAR=GREGORIAN\')'
+#                    },
+#                'SYS_P49145' => {
+#                   'HIGH_VALUE' => 'TO_DATE(\' 2017-10-30 00:00:00\', \'SYYYY-MM-DD HH24:MI:SS\', \'NLS_CALENDAR=GREGORIAN\')',
+#                   'PARTITION_POSITION' => '21',
+#                   'PNAME' => 'SYS_P49145'
+#                    },
+#                'SYS_P48802' => {
+#                   'vsp1' => {
+#                      'PARTITION_POSITION' => '17',
+		
+}
+# ======================================================================================================
 sub GetParams {
 	my @dbs;
 	my $basedb;
@@ -775,7 +885,34 @@ sub main {
 		$objectlist = GetObjects($databases, $inputlist);
 	}
 print Dumper($objectlist);
-#	CompareObjects($list, $report, $databases);
+#VAR1 = {
+#    'DB0' => {
+#      'TRP_OWNER' => {
+#           'PNRP_MSG_LOG' => {
+#                'SYS_P49565' => {
+#                   'PARTITION_POSITION' => '3',
+#                   'PNAME' => 'SYS_P49565',
+#                   'HIGH_VALUE' => 'TO_DATE(\' 2017-01-11 00:00:00\', \'SYYYY-MM-DD HH24:MI:SS\', \'NLS_CALENDAR=GREGORIAN\')'
+#                    },
+#                'SYS_P49145' => {
+#                   'HIGH_VALUE' => 'TO_DATE(\' 2017-10-30 00:00:00\', \'SYYYY-MM-DD HH24:MI:SS\', \'NLS_CALENDAR=GREGORIAN\')',
+#                   'PARTITION_POSITION' => '21',
+#                   'PNAME' => 'SYS_P49145'
+#                    },
+#                'SYS_P48802' => {
+#                   'vsp1' => {
+#                      'PARTITION_POSITION' => '17',
+#                      'PNAME' => 'SYS_P48802',
+#                      'HIGH_VALUE' => 'TO_DATE(\' 2017-10-26 00:00:00\', \'SYYYY-MM-DD HH24:MI:SS\', \'NLS_CALENDAR=GREGORIAN\')',
+#                      'WHERE' => '(VND_CD > \'EY\')
+
+#RemoveExcludesFromList($list, \@EXCLUDES); #$list is reference
+#MarkCmpKeyOnly($list, \@CMP_KEY_ONLY);
+#MarkCmpColumns($list, \@CMP_COLUMNS);
+#RemapAllTables($list, \@MAPS); #$list is reference
+#ProcessAllTables($list, $report, \%DATABASES);
+
+	CompareObjects($objectlist, $report, $databases);
 
 }
 

@@ -209,7 +209,7 @@ sub GetParams {
 		my %db;
 		my $shareddb = &share(\%db);
 
-		if ($d =~ /(?:([\w\d]+)=)?([\w\d]+)(?:\/([\w\d]+))?\@([\w\d\.\-]+)(?::(\d+))?\/([\w\d]+)/) {
+		if ($d =~ /(?:([\w\d]+)=)?([\w\d]+)(?:\/(\S+))?\@([\w\d\.\-]+)(?::(\d+))?\/([\w\d]+)/) {
 			   #alias, user, pass, host, port, service
 			($db{'ALIAS'}, $db{'USER'}, $db{'PASS'}, $db{'HOST'}, $db{'PORT'}, $db{'SERVICE'}) = ($1, $2, $3, $4, $5, $6);
 		} else {
