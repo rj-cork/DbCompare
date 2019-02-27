@@ -2,7 +2,7 @@
 
 # DataCompare.pl - script and manual for comparing data in multiple 
 #		   schemas/tables across multiple databases
-# Version 1.11
+# Version 1.13
 # (C) 2016 - Radoslaw Karas <rj.cork@gmail.com>
 # 
 # This program is free software; you can redistribute it and/or modify
@@ -165,6 +165,7 @@ sub GetParams {
 	    'outputfile|logfile|log|o|l=s' => \$LOG_FILE,
 	    'maxload=i' => \$MAX_LOAD_PER_INST,
 	    'pid|pidfile=s' => \$PID_FILE,
+	    'skippartsrowlimit' => \$SKIP_PARTS_ROW_LIMIT,
 	    'help|h' => \$help) or $help=100;
 
 	if ($help) {
@@ -201,7 +202,7 @@ sub GetParams {
 		
 		next if (not defined $d);
 
-		if ($d =~ /(?:([\w\d]+)=)?([\w\d]+)(?:\/(\S+))?\@([\w\d\.\-]+)(?::(\d+))?\/([\w\d]+)/) {
+		if ($d =~ /(?:([\w\d]+)=)?([\w\d]+)(?:\/(\S+))?\@([\w\d\.\-]+)(?::(\d+))?\/([\.\-\w\d]+)/) {
 			   #alias, user, pass, host, port, service
 			($db{'ALIAS'}, $db{'USER'}, $db{'PASS'}, $db{'HOST'}, $db{'PORT'}, $db{'SERVICE'}) = ($1, $2, $3, $4, $5, $6);
 		} else {
@@ -465,7 +466,7 @@ sub GetTableList {
 		#if (defined ($row->{PARTITION_NAME})) {
 		#switch to partitions only where $row->{NUM_ROWS}>$SKIP_PARTS_ROW_LIMIT 
 		if (defined ($row->{PARTITION_NAME}) && $row->{NUM_ROWS} > $SKIP_PARTS_ROW_LIMIT) {
-			if (defined($row->{HIGH_VALUE})) {
+			if (defined($row->{HIGH_VALUE}) && $row->{HIGH_VALUE} =~ /TIMESTAMP/ ) { #is it interval/range?
 				$p .= '.'.$row->{PARTITION_POSITION};
 				$list{$p} = $row->{HIGH_VALUE}." - INTERVAL '1' SECOND";
 			} else {
@@ -532,6 +533,7 @@ sub MatchRegexp { #match case insensitive
         $reg =~ s/\*/\.\*/g;
         $reg =~ s/\?/\./g;
 	$reg =~ s/%/\.\*/g;
+	$reg =~ s/\$/\\\$/g;
         return 1 if ($m =~ /^$reg$/i);
 
 	return 0; #didnt match
@@ -547,7 +549,7 @@ sub RemoveExcludedTables {
 	my $exclusions = 0;
 
 	foreach my $t (sort keys %{$tables}) {
-		if ($t =~ /^(?:([\w\d]+)\.)([\w\d\$]+)(?:\.([\w\d]+))?$/) {
+		if ($t =~ /^(?:([\w\d]+)\.)([\w\d\\\$]+)(?:\.([\w\d]+))?$/) {
 			my ($sch,$ta,$pa) = ($1,$2,$3);
 			#print STDERR "$t => $sch|$ta|$pa\n";
 			if ( MatchRegexp($sch, $e_schema) && MatchRegexp($ta, $e_table) ) { #&& MatchRegexp($pa, $e_part) ) {
@@ -586,7 +588,7 @@ sub RemoveExcludesFromList {
 		# 	$1(optional)-dbalias, $2-schema,    $3(opt)-table,     $4(opt)-partition 
 		#   since v1.02 $4 will not be partition, it will be a column, RemoveExcludedTables is updated as well
 		#	$1(optional)-dbalias, $2-schema,    $3(opt)-table,     $4(opt)-column - without wildcards
-		if ($e =~ /^(?:([\w\d]+)=)?([\w\d\?\*%]+)(?:\.([\w\d\$\?\*%]+))?(?:\.([\w\d]+))?$/) {
+		if ($e =~ /^(?:([\w\d]+)=)?([\w\d\?\*%]+)(?:\.([\w\d\\\$\?\*%]+))?(?:\.([\w\d]+))?$/) {
 			my ($dba, $schema, $table, $column) = ($1, $2, $3, $4);
 			#empty/undef value means all 
 			#print "$dba, $schema, $table, $column\n";
@@ -1713,6 +1715,11 @@ Increases verbosity level. You may add multiple -v to increase the level.
 
 When enabled, the script starts its work only if there are tables left to process in state file.
 
+=item --skippartsrowlimit
+
+Privide min number of rows for table which will have partitions checked separately.
+
+=item -h, --help
 =item -h, --help
 
 Displays this message.

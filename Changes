@@ -1,6 +1,13 @@
 Revision history for DbCompare and DataCompare scripts
 
 DbCompare.pl
+	1.13
+		- GetColumns and GetPrimaryKey weren't processing tables with '$'
+
+        1.12
+                - fixes in connect string parsing - password can contain special characters now, service name can contain - and .
+                - added parameter for SKIP_PARTS_ROW_LIMIT 
+                - fix: list partitions were processed as interval/range partitions not as hash (by name)
 
 	1.11
 		- fix ProcessAllTables in purging pipe after parent gets child pid from waitpid 
@@ -42,6 +49,10 @@ DbCompare.pl
 
 
 DataCompare.pm 
+
+	1.22
+		- fixes in connect string parsing - password can contain special characters now, service name can contain - and .
+		- GetColumns and GetPrimaryKey weren't processing tables with '$'
 
 	1.21
 		- db connection strings will be always printed not only in debug mode

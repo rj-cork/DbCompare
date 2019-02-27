@@ -1,7 +1,7 @@
 package DataCompare;
 
 # DataCompare package - functions for comparing data in multiple tables/table partitions
-# Version 1.21
+# Version 1.22
 # (C) 2016 - Radoslaw Karas <rj.cork@gmail.com>
 # 
 # This program is free software; you can redistribute it and/or modify
@@ -209,7 +209,7 @@ sub GetParams {
 		my %db;
 		my $shareddb = &share(\%db);
 
-		if ($d =~ /(?:([\w\d]+)=)?([\w\d]+)(?:\/(\S+))?\@([\w\d\.\-]+)(?::(\d+))?\/([\w\d]+)/) {
+		if ($d =~ /(?:([\w\d]+)=)?([\w\d]+)(?:\/(\S+))?\@([\w\d\.\-]+)(?::(\d+))?\/([\.\-\w\d]+)/) {
 			   #alias, user, pass, host, port, service
 			($db{'ALIAS'}, $db{'USER'}, $db{'PASS'}, $db{'HOST'}, $db{'PORT'}, $db{'SERVICE'}) = ($1, $2, $3, $4, $5, $6);
 		} else {
@@ -367,7 +367,7 @@ sub GetPrimaryKey {
 	$sql .= "FROM all_constraints cons join all_cons_columns cols on (cols.constraint_name=cons.constraint_name) WHERE ";
 	$sql .= "cons.constraint_type in ('P','U') AND cons.owner = cols.owner AND cons.status = 'ENABLED' ";
 
-	if ($tablename =~ /(\w+)\.(\w+)/) {
+	if ($tablename =~ /([\w\d\\\$]+)\.([\w\d\\\$]+)/) {
 		$sql .= "and cols.table_name = '$2' and cols.owner='$1' ";
 	} else {
 		$sql .= "and cols.table_name='$tablename' ";
@@ -471,7 +471,7 @@ sub GetColumns {
 	my $wname = shift;
 	my $sql;
 
-	if ($tablename =~ /(\w+)\.(\w+)/) {
+	if ($tablename =~ /([\w\d\\\$]+)\.([\w\d\\\$]+)/) {
 		$sql = "select OWNER,TABLE_NAME,COLUMN_NAME,DATA_TYPE,NULLABLE,COLUMN_ID from ";
 		$sql .= "all_tab_columns where table_name='$2' and owner='$1'";
 	} else {
