@@ -7,6 +7,8 @@ DataCompare:
 
 DbCompare: 
 
+	- add version parameter
+
 	- Processing  table1 18/04/20 05:57:25
 [76701 table1] GetPrimaryKey(SRC): ERROR: There is neither PK nor Unique constraint enabled for table table1
 [ERROR] Error from child 29 (7424) 1:04 PM 

@@ -348,7 +348,7 @@ sub SessionSetup {
 	$dbh->do("ALTER SESSION SET NLS_TIMESTAMP_FORMAT='YYYY-MM-DD HH24:MI:SS.FF'");
 #	uncomment to force buffered reads instead direct reads
 #	#$dbh->do('alter session set "_parallel_cluster_cache_policy" = CACHED');
-#	#$dbh->do('alter session set PARALLEL_FORCE_LOCAL = true');
+	$dbh->do('alter session set PARALLEL_FORCE_LOCAL = true');
 #	#$dbh->do('alter session set  "_serial_direct_read" = never');
 #	#$dbh->do('alter session set "_very_large_object_threshold" = 1000000000');
 	my $r = $dbh->selectrow_hashref("select SYS_CONTEXT ('USERENV','INSTANCE_NAME') INST, SYS_CONTEXT ('USERENV','DB_NAME') DB from dual");
