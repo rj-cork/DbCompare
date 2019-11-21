@@ -2,7 +2,7 @@
 
 # DataCompare.pl - script and manual for comparing data in multiple 
 #		   schemas/tables across multiple databases
-# Version 1.13
+# Version 1.14
 # (C) 2016 - Radoslaw Karas <rj.cork@gmail.com>
 # 
 # This program is free software; you can redistribute it and/or modify
@@ -86,6 +86,7 @@ my $PARALLEL = 4;
 my $MAX_LOAD_PER_INST = 0;
 my $CONTINUE_ONLY = 0; #if 1 do not start unless there is job left to do from previous run
 #my $WORKER_PROCESS;
+my $PARTITION_FILTER = ''; #works only with oracle 12 and above
 my $SKIP_PARTS_ROW_LIMIT = 5*1000*1000; #switch to partitions for tables bigger than 8mln rows -> taken from stats!
 my $PID_FILE;
 my %CHILDREN; #hash containing all children information $child_pid => pipe, state of child (prepare|execute|receive) 
@@ -166,6 +167,7 @@ sub GetParams {
 	    'maxload=i' => \$MAX_LOAD_PER_INST,
 	    'pid|pidfile=s' => \$PID_FILE,
 	    'skippartsrowlimit' => \$SKIP_PARTS_ROW_LIMIT,
+	    'partitionfilter=s' => \$PARTITION_FILTER,
 	    'help|h' => \$help) or $help=100;
 
 	if ($help) {
@@ -247,7 +249,10 @@ sub GetParams {
 		PrintMsg ERROR, "GetParams(): Schema name is needed. --schema=schema1\n";
 		exit 1;
 	} 
-
+	
+	#if ($PARTITION_FILTER) {
+	#	PrintMsg "GetParams() ddd: ($PARTITION_FILTER)\n";
+	#}
 #	foreach my $m (keys %maps) {
 #		if (not defined($PROGRESS{$m})) {
 #			print "ERROR: Invalid mapping parameter. There is no $m defined.\n";
@@ -424,6 +429,32 @@ sub GetTableList {
 	my %list;
 	my $sql = "select t.owner,t.table_name,p.partition_name,p.high_value,p.partition_position,t.num_rows from all_tables t left join all_tab_partitions p on t.owner=p.table_owner and t.table_name=p.table_name where ";
 
+	if ($PARTITION_FILTER) {
+		$sql = q{
+WITH
+  FUNCTION get_high_value_as_tm(p_owner in varchar2, p_table_name in varchar2, p_partition_name in varchar2) RETURN date IS
+        v_high_value varchar2(1024);
+        i number;
+        v_time timestamp;
+  BEGIN
+    select high_value into v_high_value from all_tab_partitions                
+        where  table_owner=upper(p_owner) and table_name = upper(p_table_name) and partition_name = upper(p_partition_name);
+    execute immediate 'select ' || v_high_value || ' from dual' into v_time;
+    RETURN v_time;
+
+    EXCEPTION 
+    WHEN NO_DATA_FOUND THEN
+        RETURN NULL;
+    WHEN others THEN
+	RETURN NULL;
+  END;
+select * from (
+select t.owner,t.table_name,p.partition_name,p.partition_position,t.num_rows,high_value,get_high_value_as_tm(t.owner,t.table_name,p.partition_name) high_value_date from all_tables t left join all_tab_partitions p on t.owner=p.table_owner and t.table_name=p.table_name
+) t where };
+        #raise_application_error(-20001, 'Cannot get last date for: '||p_table_name||'.'||p_partition_name||': '||sqlerrm);
+		$sql .= $PARTITION_FILTER.' and ';
+	}
+
 	$dbh->{LongReadLen} = 1000; # high_value is long
 					#when choosing partition using high value substract 1 second or less - 1/86400
 		#select count(*) from DATA_OWNER.TAB partition for (TO_DATE(' 2016-11-17 00:00:00', 'SYYYY-MM-DD HH24:MI:SS', 'NLS_CALENDAR=GREGORIAN')-1/86400);
@@ -466,7 +497,8 @@ sub GetTableList {
 		#if (defined ($row->{PARTITION_NAME})) {
 		#switch to partitions only where $row->{NUM_ROWS}>$SKIP_PARTS_ROW_LIMIT 
 		if (defined ($row->{PARTITION_NAME}) && $row->{NUM_ROWS} > $SKIP_PARTS_ROW_LIMIT) {
-			if (defined($row->{HIGH_VALUE}) && $row->{HIGH_VALUE} =~ /TIMESTAMP/ ) { #is it interval/range?
+			if (defined($row->{HIGH_VALUE}) && ($row->{HIGH_VALUE} =~ /TIMESTAMP|TO_DATE/ || defined($row->{HIGH_VALUE_DATE}))) { #is it interval/range?
+			#if (defined($row->{HIGH_VALUE}) && $row->{HIGH_VALUE} =~ /TIMESTAMP/ ) { #is it interval/range?
 				$p .= '.'.$row->{PARTITION_POSITION};
 				$list{$p} = $row->{HIGH_VALUE}." - INTERVAL '1' SECOND";
 			} else {
@@ -1723,7 +1755,6 @@ Privide min number of rows for table which will have partitions checked separate
 =item -h, --help
 
 Displays this message.
-
 =back
 
 =head1 EXAMPLES
