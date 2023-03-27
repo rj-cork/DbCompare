@@ -1,7 +1,7 @@
 package DataCompare;
 
 # DataCompare package - functions for comparing data in multiple tables/table partitions
-# Version 1.22
+# Version 1.23
 # (C) 2016 - Radoslaw Karas <rj.cork@gmail.com>
 # 
 # This program is free software; you can redistribute it and/or modify
@@ -32,6 +32,7 @@ use Getopt::Long;
 use Data::Dumper;
 use Storable qw(freeze thaw dclone);
 use Pod::Usage;
+use Pod::Text;
 use FileHandle;
 
 #
@@ -190,6 +191,7 @@ sub GetParams {
 		    'partitionfor=s' => \$partfor,
 		    'checktype!' => \$CHECK_COL_TYPE,
 		    'checknullable!' => \$CHECK_COL_NULLABLE,
+		    'where=s' => \$LIMITER,
 		    'help|h' => \$help,
 		    'logfile|l=s' => \$LOGFILE) or $help=100;
 	
@@ -275,7 +277,7 @@ sub GetParams {
 	}
 
 	if (defined($part)) {
-		$PARTITION = " PARTITION ($part)";
+		$PARTITION = " PARTITION (\"$part\")";
 	} elsif (defined($partfor)) {
 		$PARTITION = " PARTITION FOR ($partfor)";
 	}
@@ -292,6 +294,8 @@ sub GetParams {
 		PrintMsg "ERROR: Parameters --comparecol and --keyonly are mutual exclusive.\n";
                 exit 1;
 	}
+
+	PrintMsg "Limiter: $LIMITER\n" if ($DEBUG > 1);
 }
 
 

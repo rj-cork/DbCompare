@@ -1,6 +1,9 @@
 Revision history for DbCompare and DataCompare scripts
 
 DbCompare.pl
+	1.14	- added rounds parameter for number of 2nd stage passes
+		- added partition filtering i.e. --partitionfilter "high_value_date between sysdate-31 and sysdate+63"
+
 	1.13
 		- GetColumns and GetPrimaryKey weren't processing tables with '$'
 
@@ -49,6 +52,9 @@ DbCompare.pl
 
 
 DataCompare.pm 
+	1.23
+		- added where parameter to limit compared records for datacompare
+		- fixed error DBD ERROR: error possibly near <*> indicator at char 72 in SELECT pk_col, 'exists' CMP#VALUE FROM table PARTITION <*>(0I)
 
 	1.22
 		- fixes in connect string parsing - password can contain special characters now, service name can contain - and .

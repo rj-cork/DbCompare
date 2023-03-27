@@ -1,8 +1,8 @@
 #!/usr/bin/perl -w
 
-# DataCompare.pl - script and manual for comparing data in multiple 
+# DbCompare.pl - script and manual for comparing data in multiple 
 #		   schemas/tables across multiple databases
-# Version 1.14
+# Version 1.14_1
 # (C) 2016 - Radoslaw Karas <rj.cork@gmail.com>
 # 
 # This program is free software; you can redistribute it and/or modify
@@ -90,6 +90,7 @@ my $PARTITION_FILTER = ''; #works only with oracle 12 and above
 my $SKIP_PARTS_ROW_LIMIT = 5*1000*1000; #switch to partitions for tables bigger than 8mln rows -> taken from stats!
 my $PID_FILE;
 my %CHILDREN; #hash containing all children information $child_pid => pipe, state of child (prepare|execute|receive) 
+my $ROUNDS = 5; #second stage retries
 
 sub PrintMsg {
 	my $m = shift;
@@ -162,6 +163,7 @@ sub GetParams {
 	    'exclude|e=s' => \@EXCLUDES,
 	    'range|r=s' => \@TIME_RANGES,
 	    'dry|test|t' => \$TEST_ONLY,
+            'rounds=i' => \$ROUNDS,
 	    'statefile|state|f=s' => \$STATE_FILE,
 	    'outputfile|logfile|log|o|l=s' => \$LOG_FILE,
 	    'maxload=i' => \$MAX_LOAD_PER_INST,
@@ -1340,6 +1342,10 @@ sub PrepareArgs {
 
 	for (my $i=0; $i<$DEBUG && $i<10; $i++) {
 		push @args, '--verbose'; #it stacks
+	}	
+
+	if (defined $ROUNDS) {
+		push @args, '--rounds', $ROUNDS;
 	}	
 
 
