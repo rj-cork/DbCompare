@@ -2,7 +2,7 @@
 
 # DbCompare.pl - script and manual for comparing data in multiple 
 #		   schemas/tables across multiple databases
-# Version 1.14_1
+# Version 1.14_2
 # (C) 2016 - Radoslaw Karas <rj.cork@gmail.com>
 # 
 # This program is free software; you can redistribute it and/or modify
@@ -159,6 +159,7 @@ sub GetParams {
 	    'continueonly' => \$CONTINUE_ONLY,
             'verbose|v+' => \$DEBUG,
 	    'parallel|p=i' => \$PARALLEL,
+	    'maxparallel=i' => \$MAX_PARALLEL,
 	    'remap|m=s' => \@MAPS,
 	    'exclude|e=s' => \@EXCLUDES,
 	    'range|r=s' => \@TIME_RANGES,
@@ -184,8 +185,8 @@ sub GetParams {
 		exit 1;
 	}
 	
-	if ($PARALLEL > 16 || $PARALLEL < 1) {
-		PrintMsg ERROR, "GetParams(): --parallel outside valid range 1 to 16.\n";
+	if ($PARALLEL > 32 || $PARALLEL < 1) {
+		PrintMsg ERROR, "GetParams(): --parallel outside valid range 1 to 32.\n";
 		exit 1;
 	}
 
@@ -1717,6 +1718,11 @@ Compares rows using PK or unique key. It is the fastest way for comparision as t
 
 Choose level of parallelism for query calculating SHA1 sums. Defaults to 4.
 
+=item --maxparallel NUMBER
+
+How many parallel processed objects. There can be only 1 in preparing/execute state, the rest parallel processes can be receiving data only, set to 1 to disable adaptive parallelisation
+Defaults to 3, one in execution and two in data receiving state.
+
 =item -r, --range "Mo-We 20:00-6:00"
 
 If given, each time script starts compatision of new table it checks if current time is outside given range. That allows to add entry in crontab to start i.e. at 20:00 and the script stops its work after crossing given boundary. You can provide multiple time ranges. For example --range "Mon-Fri 21:00-6:00" --range "Sat-Sun" will allow to run the script every work day at night and whole day during a weekend.
@@ -1758,9 +1764,9 @@ When enabled, the script starts its work only if there are tables left to proces
 Privide min number of rows for table which will have partitions checked separately.
 
 =item -h, --help
-=item -h, --help
 
 Displays this message.
+
 =back
 
 =head1 EXAMPLES

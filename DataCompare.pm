@@ -1,7 +1,7 @@
 package DataCompare;
 
 # DataCompare package - functions for comparing data in multiple tables/table partitions
-# Version 1.23
+# Version 1.24
 # (C) 2016 - Radoslaw Karas <rj.cork@gmail.com>
 # 
 # This program is free software; you can redistribute it and/or modify
@@ -91,7 +91,10 @@ my %MAPPINGS :shared;
 my %PARTMAPPINGS :shared;
 my $OUTOFSYNCCOUNTER :shared = 0;
 my $CMP_KEY_ONLY :shared = 0; #if set, do not use column for comparison nor sha1 - just check pk -> records existence 
-my $LIMITER :shared; #used if CMP_COLUMN defined, TODO: will it be used at all?
+my $LIMITER; #used if CMP_COLUMN defined, TODO: will it be used at all?
+my @CHUNKS :shared; #we will keep here pk/uk ranges taken from select parma_col or pk_cols from table ... sample (1/chunk_size*100)
+my $CHUNK_SIZE = 0; #non 0 turns on chunks creation
+my $CREATE_CHUNKS_BY :shared; #how to split table/partition - column name for chunk creation in select ... sample(), default first column in PK/U
 
 my $print_exec_finished :shared = 1; #flag for printing message about finished sql executing only once in all workers
 
@@ -185,6 +188,8 @@ sub GetParams {
 		    'rounds|r=i' => \$ROUNDS,
 		    'sleep|s=i' => \$SECONDSTAGESLEEP,
 		    'map|m=s' => \%maps,
+		    'createchunksby=s' => \$CREATE_CHUNKS_BY,
+		    'chunksize=i' => \$CHUNK_SIZE,
 		    'mappartition=s' => \%mapparts,
 		    'partition=s' => \$part,
 		    'limiter=s' => \$LIMITER,
@@ -257,6 +262,12 @@ sub GetParams {
 			# at the moment oldschema.oldtable is always the same: $TABLENAMES[0] -> changed to $TABLENAME 15.01.2017
 			# so map is just newschema.newtable
 		}
+	}
+
+	if (scalar(keys %mapparts)>0 && (defined($CREATE_CHUNKS_BY) || $CHUNK_SIZE>0)) {
+		PrintMsg "ERROR: Partition mapping (--mappartition) and using chunks are mutually exclusive.\n";
+		exit 1;
+		
 	}
 
 	foreach my $mp (keys %mapparts) {
@@ -531,6 +542,38 @@ sub GetColumns {
 	return 0;
 }
 
+sub GetChunks {
+	my $dbh = shift;
+	my $table_part_name = shift;
+	my $wname = shift;
+	my $sql;
+
+	
+	return 0 if (scalar(@CHUNKS)); #is it already populated?
+
+	if ( !defined($CREATE_CHUNKS_BY) || $CHUNK_SIZE <= 0 ) {
+		PrintMsg ("GetChunks($wname): ERROR: either chunk_size is 0 or no column specified for creating chunks\n");
+		return -1;
+	}
+
+	$sql = "SELECT $CREATE_CHUNKS_BY FROM ".$table_part_name." SAMPLE(".(1/$CHUNK_SIZE*100).") ORDER BY $CREATE_CHUNKS_BY";
+
+	PrintMsg ("GetChunks($wname): $sql\n") if ($DEBUG>1);
+
+	my $r = $dbh->selectall_arrayref($sql);
+
+
+	if ( scalar(@{$r}) == 0 ) {
+		PrintMsg ("GetChunks($wname): ERROR: There are no chunks created for given chunk size: $CHUNK_SIZE\n");
+		return -1;
+	}
+
+	@CHUNKS = map {$_->[0]} @{$r};
+	PrintMsg ("GetChunks[$wname]: $CREATE_CHUNKS_BY split into (".join(',',@CHUNKS).")\n");
+
+	return 0;
+}
+
 sub SHA1Sql {
 	my @pk = @_;
 	my $sql = 'SELECT '.$PARALLEL.join(',',@pk).", DBMS_CRYPTO.Hash(\n";
@@ -620,36 +663,90 @@ sub FirstStageWorker {
 		}
 	}
 
+
 	my @PK_COLUMNS = sort { $COLUMNS{$a}->{CPOSITON} <=> $COLUMNS{$b}->{CPOSITON} } grep {defined $COLUMNS{$_}->{CPOSITON}} keys %COLUMNS;
 
 	PrintMsg( "FirstStageWorker[$worker_name] PrimaryKey/Unique: ", join(',',@PK_COLUMNS),"\n");
 
+	PrintMsg ("FirstStageWorker[$worker_name] Chunksize: $CHUNK_SIZE\n") if ($DEBUG>1);
+
+	if ($CHUNK_SIZE > 0) {
+		lock(@CHUNKS);
+		if (!defined($CREATE_CHUNKS_BY)) {
+			$CREATE_CHUNKS_BY = $PK_COLUMNS[0];
+		}
+		if (GetChunks($dbh, $tablename.$PARTITION, $worker_name) < 0) {
+			lock($RUNNING);
+			$RUNNING=-105;
+			return -1;
+		}
+	}
+
+my $i=0;
+my $chunk_no = 0;
+my $top_limit=undef;
+my $down_limit=undef;
+
+do {
 	my $sql;
 	my $orderby = ' ORDER BY '.join(',',@PK_COLUMNS);
+	my $limiter_with_chunk = $LIMITER;
+	
+	$down_limit = $top_limit if (defined($top_limit));
+        $top_limit = $CHUNKS[$chunk_no];
+
+
+	$limiter_with_chunk.= ((length($limiter_with_chunk)>0)?' AND ':'')."$CREATE_CHUNKS_BY >= '$down_limit'" if (defined($down_limit));
+        $limiter_with_chunk.= ((length($limiter_with_chunk)>0)?' AND ':'')."$CREATE_CHUNKS_BY < '$top_limit'" if (defined($top_limit));
 
 	if (defined($PARTMAPPINGS{$worker_name}) && scalar(@{$PARTMAPPINGS{$worker_name}}) > 0 && $PARTITION) {
 		my $hook = '';
 		foreach my $partmap (@{$PARTMAPPINGS{$worker_name}}) {
 			$partmap = " PARTITION ($partmap) ";
 			if (defined($CMP_COLUMN)) {
-				$sql .= $hook.'SELECT '.join(',',@PK_COLUMNS).','.$CMP_COLUMN.' CMP#VALUE FROM '.$tablename.$partmap.' WHERE '.$LIMITER;
+				$sql .= $hook.'SELECT '.join(',',@PK_COLUMNS).','.$CMP_COLUMN.' CMP#VALUE FROM '.$tablename.$partmap.' WHERE '.$limiter_with_chunk;
 			} elsif ($CMP_KEY_ONLY) {
-				$sql .= $hook.'SELECT '.join(',',@PK_COLUMNS).", 'exists' CMP#VALUE FROM ".$tablename.$PARTITION.' WHERE '.$LIMITER;
+				$sql .= $hook.'SELECT '.join(',',@PK_COLUMNS).", 'exists' CMP#VALUE FROM ".$tablename.$PARTITION.' WHERE '.$limiter_with_chunk;
 			} else {
-				$sql .= $hook.SHA1Sql(@PK_COLUMNS).$tablename.$partmap;
+				$sql .= $hook.SHA1Sql(@PK_COLUMNS).$tablename.$partmap.' WHERE '.$limiter_with_chunk;
 			}
 			$hook = "\n UNION ALL \n";
 		}
 		$sql .= $orderby;
 	} else {
 		if (defined($CMP_COLUMN)) {
-			$sql = 'SELECT '.join(',',@PK_COLUMNS).','.$CMP_COLUMN.' CMP#VALUE FROM '.$tablename.$PARTITION.' WHERE '.$LIMITER.$orderby;
+			$sql = 'SELECT '.join(',',@PK_COLUMNS).','.$CMP_COLUMN.' CMP#VALUE FROM '.$tablename.$PARTITION.' WHERE '.$limiter_with_chunk.$orderby;
 		} elsif ($CMP_KEY_ONLY) {
-			$sql = 'SELECT '.join(',',@PK_COLUMNS).", 'exists' CMP#VALUE FROM ".$tablename.$PARTITION.' WHERE '.$LIMITER.$orderby;
+			$sql = 'SELECT '.join(',',@PK_COLUMNS).", 'exists' CMP#VALUE FROM ".$tablename.$PARTITION.' WHERE '.$limiter_with_chunk.$orderby;
 		} else {
-			$sql = SHA1Sql(@PK_COLUMNS).$tablename.$PARTITION.$orderby;
+			$sql = SHA1Sql(@PK_COLUMNS).$tablename.$PARTITION.' WHERE '.$limiter_with_chunk.$orderby;
 		}
 	}
+
+#before each chunk make sure we are in the same place across all workers:
+	{
+		lock(%PROGRESS);
+
+		my $p = $PROGRESS{$worker_name};
+		foreach my $k (keys %PROGRESS) { #$p is the smallest progress for all workers
+			$p = $PROGRESS{$k} if ($PROGRESS{$k}<$p);
+		}
+
+		#$s is the difference between this worker and the slowest one
+		my $s=$PROGRESS{$worker_name}-$p;
+
+		until($s < 1) { #we are synchronizing all workers, no difference expected
+			PrintMsg( "[$worker_name] New CHUNK, batch no. $PROGRESS{$worker_name} is $s ahead others, waiting\n") if ($DEBUG>0);
+			#find worker with the smallest progress different than this one
+			$p = $PROGRESS{$worker_name};
+			foreach my $k (keys %PROGRESS) {
+				$p = $PROGRESS{$k} if ($PROGRESS{$k}<$p);
+			}
+			#$s is the difference between this worker and the slowest one
+			$s = $PROGRESS{$worker_name}-$p;
+			cond_wait(%PROGRESS); #release lock on %PROGRESS and wait until some other worker do some work
+		}
+	}	
 
 	PrintMsg( "[$worker_name] $sql\n") if ($DEBUG>0);
 
@@ -667,7 +764,6 @@ sub FirstStageWorker {
 		return -1;
 	}
 
-	my $i=0;
 	my ($val,$key);
 	while (my $aref = $prep->fetchall_arrayref(undef, $MAX_ROWS)) {
 
@@ -682,7 +778,7 @@ sub FirstStageWorker {
 
 			#if the smallest progress is >0 then all are downloading data now and sql execution phase has ended across all databases
 			if ($p > 0) {
-				PrintMsg( "FirstStageWorker: sql execution finished across all workers.\n") if ($print_exec_finished);
+				PrintMsg( "FirstStageWorker: sql execution finished across all workers.\n") if ($print_exec_finished && $CHUNK_SIZE == 0);
 				$print_exec_finished = 0;
 			}
 
@@ -769,6 +865,10 @@ sub FirstStageWorker {
 	}
 
 	$prep->finish;
+
+	$chunk_no++;
+} while($chunk_no <= scalar(@CHUNKS));
+
 	$dbh->disconnect();
 
 	#limit so the script will not whole memory if tables are totally different
@@ -845,7 +945,7 @@ sub SecondStagePrepSql {
 	} elsif ($CMP_KEY_ONLY) {
 		$sql = "SELECT 'exists' FROM $tablename WHERE ".join(" and ", map { "$_=?" } @PK_COLUMNS ).' AND '.$LIMITER;
 	} else {
-		$sql = SHA1Sql(@PK_COLUMNS).$tablename.' WHERE '.join(" and ", map { "$_=?" } @PK_COLUMNS );
+		$sql = SHA1Sql(@PK_COLUMNS).$tablename.' WHERE '.join(" and ", map { "$_=?" } @PK_COLUMNS ).' AND '.$LIMITER;
 	}
 
 	PrintMsg( "[$dbname] $sql\n") if ($DEBUG>1);

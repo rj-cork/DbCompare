@@ -22,9 +22,10 @@ w takim wypadu moglby kontynuwoac z pozostalymi tabelami
 		what is faster i_FFS+sort_FS or i_FS?
 
 		may be use just sample select:
-		select num_rows from dba_tables where table_name='SOMETABLE';-- gives 6000000, so to get 50 rows: 50/6000000*100=.0008
+		#FALSE: select num_rows from dba_tables where table_name='SOMETABLE';-- gives 6000000, so to get 50 rows: 50/6000000*100=.0008
+		#TRUE?: 1/chunk_size*100
 		select * from (
-			select pk_col1,pk_col2,pk_col3 from sometable sample (0.0008)
+			select pk_col1,pk_col2,pk_col3 from sometable sample (0.0001)
 		) order by 1,2,3;
 
 	- if there is more than 1 unique indexes choose 1) local partitioned 2) smaller
