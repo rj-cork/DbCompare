@@ -91,9 +91,9 @@ my %MAPPINGS :shared;
 my %PARTMAPPINGS :shared;
 my $OUTOFSYNCCOUNTER :shared = 0;
 my $CMP_KEY_ONLY :shared = 0; #if set, do not use column for comparison nor sha1 - just check pk -> records existence 
-my $LIMITER; #used if CMP_COLUMN defined, TODO: will it be used at all?
+my $LIMITER = '1=1'; #used if CMP_COLUMN defined, TODO: will it be used at all?
 my @CHUNKS :shared; #we will keep here pk/uk ranges taken from select parma_col or pk_cols from table ... sample (1/chunk_size*100)
-my $CHUNK_SIZE = 0; #non 0 turns on chunks creation
+my $CHUNK_SIZE :shared = 0; #non 0 turns on chunks creation
 my $CREATE_CHUNKS_BY :shared; #how to split table/partition - column name for chunk creation in select ... sample(), default first column in PK/U
 
 my $print_exec_finished :shared = 1; #flag for printing message about finished sql executing only once in all workers
@@ -549,10 +549,10 @@ sub GetChunks {
 	my $sql;
 
 	
-	return 0 if (scalar(@CHUNKS)); #is it already populated?
+	return 0 if (scalar(@CHUNKS) or $CHUNK_SIZE == 0); #is it already populated or turned off?
 
-	if ( !defined($CREATE_CHUNKS_BY) || $CHUNK_SIZE <= 0 ) {
-		PrintMsg ("GetChunks($wname): ERROR: either chunk_size is 0 or no column specified for creating chunks\n");
+	if ( !defined($CREATE_CHUNKS_BY) || $CHUNK_SIZE < 0 ) {
+		PrintMsg ("GetChunks($wname): ERROR: either chunk_size is less than 0 or no column specified for creating chunks\n");
 		return -1;
 	}
 
@@ -564,8 +564,11 @@ sub GetChunks {
 
 
 	if ( scalar(@{$r}) == 0 ) {
-		PrintMsg ("GetChunks($wname): ERROR: There are no chunks created for given chunk size: $CHUNK_SIZE\n");
-		return -1;
+		#if chunksize bigger than compared object
+		PrintMsg ("GetChunks($wname): WARNING: There are no chunks created for given chunk size: $CHUNK_SIZE. Turning off chunking.\n");
+		$CHUNK_SIZE = 0;
+		#return -1;
+		return 0;
 	}
 
 	@CHUNKS = map {$_->[0]} @{$r};
@@ -690,41 +693,41 @@ my $down_limit=undef;
 do {
 	my $sql;
 	my $orderby = ' ORDER BY '.join(',',@PK_COLUMNS);
-	my $limiter_with_chunk = $LIMITER;
+	my $chunksql = '';
 	
 	$down_limit = $top_limit if (defined($top_limit));
         $top_limit = $CHUNKS[$chunk_no];
 
 
-	$limiter_with_chunk.= ((length($limiter_with_chunk)>0)?' AND ':'')."$CREATE_CHUNKS_BY >= '$down_limit'" if (defined($down_limit));
-        $limiter_with_chunk.= ((length($limiter_with_chunk)>0)?' AND ':'')."$CREATE_CHUNKS_BY < '$top_limit'" if (defined($top_limit));
+	$chunksql.= " AND $CREATE_CHUNKS_BY >= '$down_limit'" if (defined($down_limit));
+        $chunksql.= " AND $CREATE_CHUNKS_BY < '$top_limit'" if (defined($top_limit));
 
 	if (defined($PARTMAPPINGS{$worker_name}) && scalar(@{$PARTMAPPINGS{$worker_name}}) > 0 && $PARTITION) {
 		my $hook = '';
 		foreach my $partmap (@{$PARTMAPPINGS{$worker_name}}) {
 			$partmap = " PARTITION ($partmap) ";
 			if (defined($CMP_COLUMN)) {
-				$sql .= $hook.'SELECT '.join(',',@PK_COLUMNS).','.$CMP_COLUMN.' CMP#VALUE FROM '.$tablename.$partmap.' WHERE '.$limiter_with_chunk;
+				$sql .= $hook.'SELECT '.join(',',@PK_COLUMNS).','.$CMP_COLUMN.' CMP#VALUE FROM '.$tablename.$partmap.' WHERE '.$LIMITER.$chunksql;
 			} elsif ($CMP_KEY_ONLY) {
-				$sql .= $hook.'SELECT '.join(',',@PK_COLUMNS).", 'exists' CMP#VALUE FROM ".$tablename.$PARTITION.' WHERE '.$limiter_with_chunk;
+				$sql .= $hook.'SELECT '.join(',',@PK_COLUMNS).", 'exists' CMP#VALUE FROM ".$tablename.$PARTITION.' WHERE '.$LIMITER.$chunksql;
 			} else {
-				$sql .= $hook.SHA1Sql(@PK_COLUMNS).$tablename.$partmap.' WHERE '.$limiter_with_chunk;
+				$sql .= $hook.SHA1Sql(@PK_COLUMNS).$tablename.$partmap.' WHERE '.$LIMITER.$chunksql;
 			}
 			$hook = "\n UNION ALL \n";
 		}
 		$sql .= $orderby;
 	} else {
 		if (defined($CMP_COLUMN)) {
-			$sql = 'SELECT '.join(',',@PK_COLUMNS).','.$CMP_COLUMN.' CMP#VALUE FROM '.$tablename.$PARTITION.' WHERE '.$limiter_with_chunk.$orderby;
+			$sql = 'SELECT '.join(',',@PK_COLUMNS).','.$CMP_COLUMN.' CMP#VALUE FROM '.$tablename.$PARTITION.' WHERE '.$LIMITER.$chunksql.$orderby;
 		} elsif ($CMP_KEY_ONLY) {
-			$sql = 'SELECT '.join(',',@PK_COLUMNS).", 'exists' CMP#VALUE FROM ".$tablename.$PARTITION.' WHERE '.$limiter_with_chunk.$orderby;
+			$sql = 'SELECT '.join(',',@PK_COLUMNS).", 'exists' CMP#VALUE FROM ".$tablename.$PARTITION.' WHERE '.$LIMITER.$chunksql.$orderby;
 		} else {
-			$sql = SHA1Sql(@PK_COLUMNS).$tablename.$PARTITION.' WHERE '.$limiter_with_chunk.$orderby;
+			$sql = SHA1Sql(@PK_COLUMNS).$tablename.$PARTITION.' WHERE '.$LIMITER.$chunksql.$orderby;
 		}
 	}
 
-#before each chunk make sure we are in the same place across all workers:
-	{
+#if chunks enabled - before each chunk make sure we are in the same place across all workers:
+	if ($CHUNK_SIZE) {
 		lock(%PROGRESS);
 
 		my $p = $PROGRESS{$worker_name};
@@ -736,7 +739,7 @@ do {
 		my $s=$PROGRESS{$worker_name}-$p;
 
 		until($s < 1) { #we are synchronizing all workers, no difference expected
-			PrintMsg( "[$worker_name] New CHUNK, batch no. $PROGRESS{$worker_name} is $s ahead others, waiting\n") if ($DEBUG>0);
+			PrintMsg( "[$worker_name] Ready for new CHUNK, batch no. $PROGRESS{$worker_name} is $s ahead others, waiting\n") if ($DEBUG>0);
 			#find worker with the smallest progress different than this one
 			$p = $PROGRESS{$worker_name};
 			foreach my $k (keys %PROGRESS) {
@@ -748,7 +751,9 @@ do {
 		}
 	}	
 
-	PrintMsg( "[$worker_name] $sql\n") if ($DEBUG>0);
+	$chunksql =~ s/^\s+|\s+$//g;
+	PrintMsg( "FirstStageWorker[$worker_name] Starting chunk no. $chunk_no (".substr($chunksql, 4).")\n") if ($CHUNK_SIZE>0 && length($chunksql)>4);
+	PrintMsg( "FirstStageWorker[$worker_name] $sql\n") if ($DEBUG>0);
 
 	my $prep = $dbh->prepare($sql);
 	if(!defined($prep) or $dbh->err) { 

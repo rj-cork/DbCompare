@@ -1,7 +1,7 @@
 DataCompare:
 	- review if NLV is needed with DBMS_CRYPTO.Hash call and check if orahash is faster. Check STANDARD_HASH
 	avg(length(standard_hash(column))) is 4.5x faster than dbms_crypto.hash(utl_raw.cast_to_raw(column),3) if column is varchar2(8 char)
-
+	- check pseudo partitioning/chunks with numeric values and dates
 
 	
 
@@ -22,10 +22,9 @@ w takim wypadu moglby kontynuwoac z pozostalymi tabelami
 		what is faster i_FFS+sort_FS or i_FS?
 
 		may be use just sample select:
-		#FALSE: select num_rows from dba_tables where table_name='SOMETABLE';-- gives 6000000, so to get 50 rows: 50/6000000*100=.0008
-		#TRUE?: 1/chunk_size*100
+		select num_rows from dba_tables where table_name='SOMETABLE';-- gives 1000000, so to get 100000 rows in chunk: 1/100000*100=.001
 		select * from (
-			select pk_col1,pk_col2,pk_col3 from sometable sample (0.0001)
+			select pk_col1,pk_col2,pk_col3 from sometable sample (0.001)
 		) order by 1,2,3;
 
 	- if there is more than 1 unique indexes choose 1) local partitioned 2) smaller
