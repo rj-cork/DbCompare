@@ -113,6 +113,14 @@ Turns off comparison of column's type
 
 Turns off comparison of column's NULLable flag.
 
+=item --chunksize NUMBER
+
+Turns on data partitioning by NUMBER of rows. This method uses select col from table sample(1/chunksize*100) statement so chunks sizes are approximate and they can vary more than 100%. This is useful in cases compared rows are big and SHA1 comparison takes so much time that "ORA-01555 Snapshot Too Old" are triggered. Splitting using chunks allows to use multiple shorter selects. This option is mutual exclusive with --mappartition.
+
+=item --createchunksby COLUMN
+
+Choose COLUMN used for chunks creation. By default first column of PK is used. At this moment only CHAR/VARCHAR columns are tested.
+
 =item -h, --help
 
 Displays this message.
@@ -128,6 +136,8 @@ DataCompare.pl --db system@rac1-scan/testdb1 --db system@rac2-scan/testdb2  --ta
 DataCompare.pl --db system@rac1-scan/testdb1 --db db2=system@rac2-scan/testdb2  --table=DATA_OWNER.table2 --map db2=schema_test.table2 --excludecolumn column_1,column_4
 
 DataCompare.pl --db db1=user@rac1-scan/testdb1 --db db2=user@rac2-scan/testdb2 --table=data_owner.table3 --partition=P_0004 --parallel=6 --logfile table3.P_0004.log
+
+DataCompare.pl --table OWNER.TABLE --partition P_0001 --db DB2=user@host1:1521/service1 --db DB1=user@host2:1521/service2 --db DB0=user@host3:1521/service3 --parallel 16 --rounds 3 --chunksize 200000
 
 =head1 REPORTING BUGS
 
